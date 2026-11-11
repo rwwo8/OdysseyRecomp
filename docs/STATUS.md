@@ -1,0 +1,39 @@
+# Status (update 46, 2026-11-10)
+
+Current state only. The investigations behind each item are in `docs/notes/`.
+
+The project builds on MIT-licensed recompilation projects (LICENSE). The whole game has been played
+through on it at 60 fps.
+
+## Working (checked here)
+
+- Boot, title, Cap Kingdom: a steady 60 fps in a hidden scripted walk with the camera turning (i7-13700KF). The only
+  pauses are level loads (about 0.25-0.4 s). Since update 38 no 30 s spikes, and Dynamic resolution no longer changes
+  after one stall (`notes/hitches-2026-11-06.md`).
+- The game's button pictures follow the controller (Xbox, PlayStation; update 38, `runtime/nvn/glyphs.c`), and the
+  Controls tab's Button layout makes A / Cross confirm on those controllers, in the game and the menus.
+- Cap Kingdom's cloud sea fills the view below the cliff edges. On the old base that area was black and the sea came and
+  went (`notes/cap-fog-2026-11-04.md`).
+- Depth clamp as the game asks for it (ported: `notes/depth-clamp-2026-11-04.md`).
+- The launcher (update 37): the game's logo, read from the player's files, over Play / Settings / Controls / Files;
+  the game boots from Play at 60 fps (`notes/launcher-2026-11-05.md`). Not checked by hand with a controller yet.
+- Fullscreen on 144 / 165 Hz displays switches to the display's 60 Hz mode, and fullscreen doesn't drop out when another
+  window takes the focus (ported from the old base). Not checked here: hidden test runs are never fullscreen.
+- Dynamic resolution steps and Internal resolution changes keep what the screen targets held (update 42): before, the
+  new targets started with stale memory - hard-edged shapes (a box behind the HUD) until the game redrew those areas (`notes/triangle-dynres-2026-11-07.md`).
+- The mist "triangle" over Cascade's waterfall is gone (update 45): full-screen draws read 9 vertices from 3-vertex
+  buffers, and our streams had no end (`notes/triangle-vertex-overrun-2026-11-10.md`). Not yet confirmed by the
+  player at their spot.
+- Play keeps the launcher alive while shaders are prepared ("Starting..." on the Play tile), and one early end no
+  longer throws the prepared shaders away (update 45).
+- Frame interpolation no longer costs game frames: an in-between is left out when the GPU is still on the frame before,
+  and the brake no longer switches the present path (its 66 ms frames gone; `notes/drops-interp-2026-11-10.md`,
+  update 46). Measured with another game sharing the GPU; not on the player's visible 165 Hz window.
+
+## Known problems
+
+| Problem | State |
+| --- | --- |
+| A stage or effect seen for the first time can hold the picture for a moment (shader builds) | Upstream known issue; cached afterwards |
+| Only game version 1.0.0 | By design |
+| Not re-checked on the new base: puddle colours, the flicker by Mario's eye on the title | Open |

@@ -1,0 +1,75 @@
+// Control remapping (runtime/hle/bindings.c): which controller button / key drives each Switch input. Edited from
+// the in-game menu's Controls tab (runtime/ui/controls_ui.mm), saved in odyssey.ini.
+// The menus never use these (they keep the default layout, the Button layout applied: bind_names_layout), so no
+// binding can lock the player out.
+#pragma once
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef union SDL_Event SDL_Event;
+
+// Switch inputs, in nn::hid button-bit order (runtime/hle/input.c BTN_*), then the keyboard's stick directions.
+enum {
+    BIND_A, BIND_B, BIND_X, BIND_Y, BIND_LSTICK, BIND_RSTICK, BIND_L, BIND_R, BIND_ZL, BIND_ZR, BIND_PLUS, BIND_MINUS,
+    BIND_LEFT, BIND_UP, BIND_RIGHT, BIND_DOWN,
+    BIND_PAD_COUNT,                                      // controller: the 16 buttons (its sticks stay the sticks)
+    BIND_LS_UP = BIND_PAD_COUNT, BIND_LS_DOWN, BIND_LS_LEFT, BIND_LS_RIGHT,
+    BIND_RS_UP, BIND_RS_DOWN, BIND_RS_LEFT, BIND_RS_RIGHT,
+    BIND_KEY_COUNT                                       // keyboard: buttons + both sticks
+};
+enum { BIND_DEV_PAD, BIND_DEV_KEY, BIND_DEV_MOUSE };
+// Mouse bindings: an SDL mouse button (SDL_BUTTON_LEFT 1, MIDDLE 2, RIGHT 3, X1 4, X2 5) per Switch button, 0: none.
+// They count while the game has the mouse (input.c: captured by a click in the window).
+extern int16_t g_bind_mouse[BIND_PAD_COUNT];
+const char *bind_mouse_label(int button);
+// Controller binding values: an SDL_GamepadButton, or the analog triggers as buttons
+enum { PADB_LTRIGGER = 26 /* SDL_GAMEPAD_BUTTON_COUNT */, PADB_RTRIGGER, PADB_HOST_COUNT };
+
+extern int16_t g_bind_pad[BIND_PAD_COUNT];  // PADB value per Switch button
+extern int16_t g_bind_key[BIND_KEY_COUNT];  // SDL_Scancode per input (0 = none)
+
+const char *bind_input_name(int slot);         // "A", "D-pad Up", "Left stick Up"
+const char *bind_pad_label(int host, int fam); // controller button in the pad family's own words (fam: input_pad_family)
+const char *bind_key_label(int scancode);
+int bind_label_family(void);                   // the connected controller's family
+void bind_reset(int dev);
+bool bind_is_default(int dev);
+bool bind_is_default_slot(int dev, int slot);
+
+// "Click a binding, then press": begun from the UI; the next press (any thread's SDL event) is taken. Escape cancels,
+// as does BIND_CAPTURE_MS without a press. On a conflict the two inputs swap.
+#define BIND_CAPTURE_MS 5000
+void bind_capture_begin(int dev, int slot);
+void bind_capture_cancel(void);
+// capturing: dev / slot (else -1), ms left
+bool bind_capture_active(int *dev, int *slot, int *ms_left);
+// Main thread, before anything else sees the event: true = consumed by a capture
+bool bind_capture_event(const SDL_Event *e);
+// Last change for the UI: 0 none, 1 set, 2 swapped (with *other), 3 cancelled, 4 timed out, 5 reset; *serial bumps
+int bind_last_result(int *dev, int *slot, int *other, int *serial);
+
+// odyssey.ini: bind_pad_<input> / bind_key_<input> (only the ones that differ from the defaults are written)
+bool bind_settings_load(const char *key, const char *val);
+void bind_settings_save(FILE *f);
+
+// bind_* names (odyssey.ini): Switch input "a", "zl", "ls_up"... -> slot; controller button "south"... -> PADB value
+int bind_slot_from_name(const char *name);
+int bind_pad_from_name(const char *name);
+
+// Controls tab "Button layout": the Xbox / PlayStation layout is in use (by the setting, or Auto with such a
+// controller). The bindings stay as by position; in that layout the four face buttons read mirrored (bind_face_swap).
+bool bind_names_layout(void);
+int bind_face_swap(int host);
+// The controller button now driving Switch input `slot` (BIND_A..), the layout applied
+int bind_pad_host(int slot);
+// Button prompts (runtime/nvn/glyphs.c): the same
+int bind_prompt_host(int slot);
+
+#ifdef __cplusplus
+}
+#endif
