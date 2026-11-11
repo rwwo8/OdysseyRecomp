@@ -926,8 +926,8 @@ static void nav_icon(ImDrawList *dl, int id, ImVec2 c, float r, ImU32 col) {
 }
 
 static void tabs_body(float scale, bool in_game, void (*prelaunch)(float)) {
-    // Odyssey Recomp's own pause screen (2026-11-10, the player: "change everything, ours"): a bar along the top - the
-    // game's logo, the sections as pills side by side, Continue at the right - and the open section below it in one
+    // Odyssey Recomp's own pause screen (2026-11-10, the player: "change everything, ours"): a bar along the top - our
+    // icon and name, the sections as pills side by side, Continue at the right - and the open section below it in one
     // centred column. LB / RB (Q / E) or the cursor along the bar switch sections; A / Down goes into one; B / Esc in a
     // section comes back up to the bar, B on the bar continues the game. in_game false: the start screen's panel
     // (launcher.mm) - "Back" instead of "Continue".
@@ -966,19 +966,25 @@ static void tabs_body(float scale, bool in_game, void (*prelaunch)(float)) {
     ImDrawList *dl = ImGui::GetWindowDrawList();
     ImVec2 o = ImGui::GetCursorScreenPos();
     float x = o.x;
-    {   // the logo (from the game's files, launcher.mm), else the name
-        float aspect = 1, lh = bar_h - 14 * scale;
-        ImTextureID logo = launcher_logo(&aspect);
-        if (logo) {
-            float lw = fminf(lh * aspect, 230 * scale);
-            lh = lw / aspect;
-            dl->AddImage(logo, ImVec2(x, o.y + (bar_h - lh) * 0.5f), ImVec2(x + lw, o.y + (bar_h + lh) * 0.5f));
-            x += lw + 30 * scale;
-        } else {
-            dl->AddText(g_font_big, g_font_big->FontSize * 0.7f, ImVec2(x, o.y + (bar_h - g_font_big->FontSize * 0.7f) * 0.5f),
-                        kText, RT_APP_NAME);
-            x += g_font_big->CalcTextSizeA(g_font_big->FontSize * 0.7f, FLT_MAX, 0, RT_APP_NAME).x + 30 * scale;
+    {   // the project's own icon (docs/icon, tools/make_icon.py: a red ring and a white compass star, as on the GitHub
+        // banner) and the name - not the game's logo (2026-11-11, the player)
+        float d = bar_h * 0.98f, u = d / 1024.0f, rout = (337.92f + 40.96f) * u;  // the 1024 drawing, ring's outer edge
+        float cx = x + rout + 2 * scale, cy = o.y + bar_h * 0.5f;
+        dl->AddCircle(ImVec2(cx, cy), 337.92f * u, IM_COL32(0xE5, 0x38, 0x3B, 255), 64, 81.92f * u);
+        float r1 = 240.64f * u, r2 = 63.49f * u;  // the star's long and short points (512-271.36, 556.893-512 x sqrt2)
+        ImVec2 pts[8];
+        for (int i = 0; i < 8; i++) {
+            float a = i * 0.785398f - 1.570796f, r = (i & 1) ? r2 : r1;
+            pts[i] = ImVec2(cx + cosf(a) * r, cy + sinf(a) * r);
         }
+        for (int i = 0; i < 8; i += 2) {  // four convex wedges: centre, point, the short points either side
+            ImVec2 q[4] = {ImVec2(cx, cy), pts[(i + 7) % 8], pts[i], pts[i + 1]};
+            dl->AddConvexPolyFilled(q, 4, IM_COL32(0xF2, 0xF6, 0xF8, 255));
+        }
+        x = cx + rout + 16 * scale;
+        float ts = g_font_big->FontSize * 0.62f;
+        dl->AddText(g_font_big, ts, ImVec2(x, cy - ts * 0.5f), kText, RT_APP_NAME);
+        x += g_font_big->CalcTextSizeA(ts, FLT_MAX, 0, RT_APP_NAME).x + 30 * scale;
     }
     float ph = 50 * scale, ir = 11 * scale, py = o.y + (bar_h - ph) * 0.5f;
     auto pill = [&](int id, const char *name, float px, bool sel, bool main_action) -> bool {
