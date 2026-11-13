@@ -98,6 +98,7 @@ typedef struct TexBackend {
     bool glyphs;          // the game's button font (runtime/nvn/glyphs.c): redrawn for the controller on upload
     uint32_t glyph_gen;   // glyphs_generation() it was last uploaded with
     int reg;  // slot in textures.c's live list + 1 (a reboot destroys them all)
+    bool lrt, lrt_dirty, lrt_cpu;  // (textures.c "Linear render targets") one; drawn since its last write-back; CPU-written
 } TexBackend;
 
 TexBackend *vk_tex(NvnTexture *t, bool for_render);  // backend image (uploads CPU contents unless for_render)

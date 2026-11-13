@@ -7,6 +7,7 @@
 
 #include "gamelib.h"
 #include "hle.h"
+#include "mods.h"
 
 typedef struct { const uint64_t *addrs; const GuestFn *fns; uint64_t count, lo, hi; } FnTable;
 static FnTable tables[GAMELIB_MAX_MODULES];  // one per module of the game code library
@@ -269,6 +270,19 @@ void rt_fatal_trace(void) {
                     c->x[i + 1], i + 2, c->x[i + 2], i + 3, c->x[i + 3]);
         fprintf(stderr, "guest call chain:\n");
         rt_print_guest_chain(c);
+    }
+    {   // The end of the log is what crash reports carry (RecompLauncher's GitHub issues hold its last lines): the mods
+        // that were on, after the call chain. Players' crashes while the game loads its text or Mario's costume
+        // (issues #1, #2, #6) came without them.
+        if (mods_applied()) {
+            fprintf(stderr, "mods on at this start (a mod made for another version of the game can crash 1.0.0):\n");
+            for (int i = 0; i < mods_count(); i++) {
+                const ModInfo *m = mods_get(i);
+                if (m && m->applied) fprintf(stderr, "  %s\n", m->name);
+            }
+        } else {
+            fprintf(stderr, "no mods on at this start\n");
+        }
     }
     plat_fatal_notice();
     // our crash handler also catches SIGABRT: without this abort() re-entered it forever (a 5 GB log)

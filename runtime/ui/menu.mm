@@ -661,12 +661,16 @@ static void tab_mods(float scale) {
 
 // Quit: out to the desktop, after asking (progress since the last save is lost); B / Esc or Cancel backs out.
 static void tab_quit(float scale, bool in_game) {
-    static bool ask;
+    static bool ask, was_ask;
+    static int focus;  // frames left to put the cursor on the first button: the one pressed went away, and a controller
+                       // had no cursor left on the page (a player: "use the mouse to click the last OK to exit")
     if (ask && (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)))
         ask = false;
+    if (ask != was_ask) was_ask = ask, focus = 2;
     const char *d = in_game ? "Closes " RT_APP_NAME ".\n\nProgress since your last save is lost." : "Closes " RT_APP_NAME ".";
     opt_begin("##quit", scale);
     opt_section("Exit");
+    if (focus > 0) ImGui::SetKeyboardFocusHere(), ImGui::SetNavCursorVisible(true), focus--;
     if (!ask) {
         if (opt_action("Exit to Desktop", "", d)) ask = true;
     } else {

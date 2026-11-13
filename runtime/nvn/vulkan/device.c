@@ -1362,6 +1362,9 @@ static void backend_present_locked(NvnTexture *t, bool handed) {
     vk_pace_frame();  // (exec.c: the game's 30 fps mode when frames don't fit 60)
     extern void input_frame(uint64_t frame);
     input_frame(total_frames);
+    static long crash_at = -1;  // ODYSSEY_CRASH_AT=<frame> (tests): a fatal error there - what the crash report says
+    if (crash_at < 0) crash_at = getenv("ODYSSEY_CRASH_AT") ? atol(getenv("ODYSSEY_CRASH_AT")) : 0;
+    if (crash_at && (long)total_frames == crash_at) FATAL("test crash (ODYSSEY_CRASH_AT=%ld)\n", crash_at);
     static long slow_ms = -1;
     if (slow_ms < 0) slow_ms = getenv("ODYSSEY_SLOW_FRAME_MS") ? atol(getenv("ODYSSEY_SLOW_FRAME_MS")) : 0;
     static long slow_until = -1;  // ODYSSEY_SLOW_FRAME_UNTIL=<frame>: the stall ends there (frame pacing recovery tests)

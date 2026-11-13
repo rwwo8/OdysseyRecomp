@@ -369,7 +369,8 @@ static void builder_layout(uint64_t b, TexLayout *t) {
     }
 }
 
-static bool is_linear(uint64_t b) { return (G(uint32_t, b, 8) & 0x10) || G(uint32_t, b, 0xC) == 10; }
+// NVN texture flags 0x10 (linear) and 0x40 (linear render target): rows at the builder's stride, as the CPU sees them
+static bool is_linear(uint64_t b) { return (G(uint32_t, b, 8) & 0x50) || G(uint32_t, b, 0xC) == 10; }
 
 static uint64_t builder_storage_size(uint64_t b) {
     if (G(uint32_t, b, 0xC) == 10) {  // buffer texture
@@ -575,6 +576,13 @@ NVN(nvnTextureInitialize) {
     if (t->flags & 2)
         LOG("[nvn] video texture %p: %ux%u fmt %#x flags %#x target %u addr %llx stride %llu\n", t, t->width, t->height,
             t->format, t->flags, t->target, t->addr, t->stride);
+    if ((t->flags & 0x50) && (t->width > 1 || t->height > 1) && getenv("ODYSSEY_LOG_LINEAR")) {  // (debug: linear textures, the CPU's own layout)
+        static int n;
+        if (n++ < 200)
+            LOG("[nvn] linear texture %p: %ux%u fmt %#x flags %#x target %u addr %llx stride %llu (lr %llx)\n", (void *)t, t->width,
+                t->height, t->format, t->flags, t->target, (unsigned long long)t->addr, (unsigned long long)t->stride,
+                (unsigned long long)c->x[30]);
+    }
     if (t->target == 2 && getenv("ODYSSEY_LOG_TEXELS")) {  // (3D textures: color grading maps)
         static int n;
         LOG("[nvn] 3D texture %p: %ux%ux%u fmt %#x flags %#x addr %llx (guest %llx, lr %llx)\n", (void *)t, t->width, t->height, t->depth,

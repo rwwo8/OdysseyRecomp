@@ -486,10 +486,12 @@ static TexBackend *tex_backend(NvnTexture *t) {
 }
 
 static void twin_forget(NvnTexture *t);
+static void lrt_forget(NvnTexture *t);
 void backend_texture_destroyed(NvnTexture *t) {
     vk_render_lock();  // (any game thread: Odyssey finalizes on its loading threads while another one renders)
     twin_forget(t);
     TexBackend *b = t->backend;
+    if (b && b->lrt) lrt_forget(t);
     if (b) {
         extern void vk_alias_texture_destroyed(NvnTexture *t);  // (exec.c copy aliases: a source's contents handed over)
         vk_alias_texture_destroyed(t);
@@ -625,7 +627,7 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
     uint64_t total = tegra_total_size(&t->layout);
     b->checked_frame = frame;
     prof_tex_checks++;
-    if (t->flags & 0x10) b->dynamic = true;
+    if (t->flags & 0x50) b->dynamic = true;
     if (full_hash_budget_frame != frame) { full_hash_budget_frame = frame; full_hash_budget = 4 << 20; }
     const uint8_t *mem = (const uint8_t *)(uintptr_t)t->addr;
     static int always_full = -1;
@@ -677,7 +679,7 @@ static void upload_texture(NvnTexture *t, TexBackend *b) {
     uint32_t layers = t->layout.layers ? t->layout.layers : 1;
     if (layers > b->layers && b->depth == 1) layers = b->layers;
     uint64_t layer_size = tegra_layer_size(&t->layout);
-    bool linear = (t->flags & 0x10) != 0;
+    bool linear = (t->flags & 0x50) != 0;  // (0x10 linear, 0x40 linear render target: rows at the stride)
     uint32_t levels = t->layout.levels < b->levels ? t->layout.levels : b->levels;
     for (uint32_t layer = 0; layer < layers; layer++) {
         for (uint32_t lv = 0; lv < levels; lv++) {
@@ -828,13 +830,120 @@ static void twin_forget(NvnTexture *t) {  // (render lock) the game's image goes
     free(w);
 }
 
+// ---- Linear render targets: textures the GPU draws into and the CPU reads and writes in place (2026-11-13)
+// A linear texture (NVN flag 0x10) lies in guest memory row by row, as the CPU sees it, and on the Switch the GPU draws
+// into that same memory. Odyssey's poison goo (PaintObj: Wooded Kingdom's Sky Garden, Spewart's goo; also the Metro
+// factory, Luncheon, the poison Piranha Plant stage) is drawn on the GPU into such textures, and the CPU then reads their
+// texels to decide where Mario is poisoned (PaintObj::attackSensor, al::getColorFromLinearTexture) and clears texels
+// where Cappy cleaned (drawLabelingAndVanish, then flushCPUCache). Here the GPU draws into a Vulkan image, so guest memory
+// kept whatever it held before - the goo hurt where the picture showed none (the players' "invisible purple goo" at the
+// Sky Garden boss). So: a submission that drew into one copies it back into guest memory at its end (the imported heap:
+// a GPU copy, nothing waits), and a CPU flush of its memory (nvnMemoryPoolFlushMappedRange) uploads it again before its
+// next use. ODYSSEY_LINEAR_RT_SYNC=0: off (the old behaviour).
+#define LRT_MAX 1024  // (the game makes ~200 1x1 ones for its occlusion tests alone)
+static NvnTexture *lrt_all[LRT_MAX], *lrt_dirty[LRT_MAX];  // (lrt_all: known ones, lrt_lock; lrt_dirty: render lock)
+static int lrt_nall, lrt_ndirty;
+static pthread_mutex_t lrt_lock = PTHREAD_MUTEX_INITIALIZER;
+static bool lrt_enabled(void) {
+    static int on = -1;
+    if (on < 0) { const char *e = getenv("ODYSSEY_LINEAR_RT_SYNC"); on = !e || atoi(e) != 0; }
+    return on;
+}
+static int lrt_stats(void) {  // ODYSSEY_LRT_STATS=1 (tests): what the CPU sees in the RGBA8 ones, every 2 s (also when off)
+    static int on = -1;
+    if (on < 0) on = getenv("ODYSSEY_LRT_STATS") != NULL;
+    return on;
+}
+static void lrt_log_stats(void) {  // (render lock) per RGBA8 target: texels with alpha >= 128 (PaintObj: poisoned), not zero
+    static uint64_t last;
+    uint64_t f = vk_frame_counter();
+    if (f - last < 120) return;
+    last = f;
+    pthread_mutex_lock(&lrt_lock);
+    for (int i = 0; i < lrt_nall; i++) {
+        NvnTexture *t = lrt_all[i];
+        if (t->format != 0x25 || t->width < 64) continue;
+        uint64_t hi = 0, nz = 0;
+        for (uint32_t y = 0; y < t->height; y++) {
+            const uint8_t *row = (const uint8_t *)(uintptr_t)(t->addr + y * t->stride);
+            for (uint32_t x = 0; x < t->width; x++) hi += row[x * 4 + 3] >= 128, nz += row[x * 4] | row[x * 4 + 1] | row[x * 4 + 2] | row[x * 4 + 3] ? 1 : 0;
+        }
+        LOG("[lrt] frame %llu %ux%u at %llx: guest memory %llu texels alpha >= 128, %llu not zero\n", (unsigned long long)f,
+            t->width, t->height, (unsigned long long)t->addr, (unsigned long long)hi, (unsigned long long)nz);
+    }
+    pthread_mutex_unlock(&lrt_lock);
+}
+static void lrt_drawn(NvnTexture *t, TexBackend *b) {  // (render lock) t is about to be drawn into
+    if (!b->lrt) {
+        if (!(t->flags & 0x50) || t->target == 10 || !t->addr || (!lrt_enabled() && !lrt_stats())) return;
+        pthread_mutex_lock(&lrt_lock);
+        if (lrt_nall < LRT_MAX) { lrt_all[lrt_nall++] = t; b->lrt = true; }
+        pthread_mutex_unlock(&lrt_lock);
+        if (!b->lrt) return;
+        static int nlog;
+        if (nlog++ < 32)
+            LOG("[lrt] linear render target %ux%u f%#x stride %llu at %llx (%s): written back to guest memory\n", t->width,
+                t->height, t->format, (unsigned long long)t->stride, (unsigned long long)t->addr, t->label);
+    }
+    if (!b->lrt_dirty && lrt_ndirty < LRT_MAX) { b->lrt_dirty = true; lrt_dirty[lrt_ndirty++] = t; }
+}
+static void lrt_forget(NvnTexture *t) {  // (render lock) t goes
+    pthread_mutex_lock(&lrt_lock);
+    for (int i = 0; i < lrt_nall; i++)
+        if (lrt_all[i] == t) { lrt_all[i] = lrt_all[--lrt_nall]; break; }
+    pthread_mutex_unlock(&lrt_lock);
+    for (int i = 0; i < lrt_ndirty; i++)
+        if (lrt_dirty[i] == t) { lrt_dirty[i] = lrt_dirty[--lrt_ndirty]; break; }
+}
+static void upload_texture(NvnTexture *t, TexBackend *b);
+static void lrt_cpu_sync(NvnTexture *t, TexBackend *b) {  // (render lock) before a use: the CPU's writes to the image
+    b->lrt_cpu = false;
+    b->uploaded = false;
+    upload_texture(t, b);
+}
+// (render lock: the end of a submission's main command buffer) the targets it drew into, back to guest memory
+void vk_lrt_writeback(VkCommandBuffer cb) {
+    extern bool vk_gmem_range(uint64_t addr, uint64_t size, VkBuffer *buf, VkDeviceSize *off);
+    if (lrt_stats()) lrt_log_stats();
+    bool first = true;
+    for (int i = 0; i < lrt_ndirty; i++) {
+        NvnTexture *t = lrt_dirty[i];
+        TexBackend *b = t->backend;
+        if (!b) continue;
+        b->lrt_dirty = false;
+        if (!lrt_enabled()) continue;
+        const FormatInfo *fi = t->layout.fmt;
+        bool ok = b->image && fi && fi->bpb && fi->bpb != 3 && fi->bw == 1 && fi->bh == 1 && !tex_scaled(b) && !b->guest_format &&
+                  !b->astc_bw && !(b->aspect & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) &&
+                  b->format == fmt_of(t->format).vf && t->stride % fi->bpb == 0 && t->stride >= (uint64_t)t->width * fi->bpb;
+        uint64_t size = ok ? t->stride * (t->height - 1) + (uint64_t)t->width * fi->bpb : 0;
+        VkBuffer gb;
+        VkDeviceSize off;
+        if (!ok || !vk_gmem_range(t->addr, size, &gb, &off) || off % 4) {
+            static int nlog;
+            if (nlog++ < 8) LOG("[lrt] %ux%u f%#x at %llx: not written back (format / scaled / outside the imported heap)\n",
+                                t->width, t->height, t->format, (unsigned long long)t->addr);
+            continue;
+        }
+        if (first) vk_full_barrier(cb), first = false;
+        VkBufferImageCopy c = {.bufferOffset = off, .bufferRowLength = (uint32_t)(t->stride / fi->bpb), .bufferImageHeight = t->height,
+                               .imageSubresource = {b->aspect, 0, 0, 1}, .imageExtent = {t->width, t->height, 1}};
+        vkCmdCopyImageToBuffer(cb, b->image, VK_IMAGE_LAYOUT_GENERAL, gb, 1, &c);
+    }
+    lrt_ndirty = 0;
+    if (!first) vk_full_barrier(cb);
+}
+
 TexBackend *vk_tex(NvnTexture *t, bool for_render) {
     if (g_twin_redirect) t = replay_redirect(t, for_render);
     else if (g_interp_log) frame_access(t, for_render);
     TexBackend *b = tex_backend(t);
     if (b->pending_rgba) upload_pending(b);
-    if (for_render) b->gpu_owned = true;
-    else if (!b->gpu_owned) {
+    if (b->lrt_cpu && !g_twin_redirect) lrt_cpu_sync(t, b);
+    if (for_render) {
+        b->gpu_owned = true;
+        if (!g_twin_redirect) lrt_drawn(t, b);  // (a replay draws into a twin: never back to the game's memory)
+    } else if (!b->gpu_owned) {
         extern uint64_t prof_up_ns;
         uint64_t t0 = prof_up_ns != ~0ull ? SDL_GetTicksNS() : 0;
         upload_texture(t, b);
@@ -845,7 +954,24 @@ TexBackend *vk_tex(NvnTexture *t, bool for_render) {
 
 void renderer_mark_gpu_owned(NvnTexture *t) { tex_backend(t)->gpu_owned = true; }
 bool renderer_is_gpu_owned(NvnTexture *t) { return tex_backend(t)->gpu_owned; }
-void backend_pool_written(uint64_t addr, uint64_t size) { (void)addr; (void)size; }
+// (any thread: nvnMemoryPoolFlushMappedRange / nvnBufferFlushMappedRange) the CPU wrote guest memory for the GPU: a
+// linear render target there is uploaded again before its next use ("Linear render targets" above)
+void backend_pool_written(uint64_t addr, uint64_t size) {
+    if (!lrt_nall || !lrt_enabled()) return;
+    pthread_mutex_lock(&lrt_lock);
+    for (int i = 0; i < lrt_nall; i++) {
+        NvnTexture *t = lrt_all[i];
+        TexBackend *b = t->backend;
+        uint64_t end = t->addr + t->stride * t->height;
+        if (b && addr < end && addr + size > t->addr) {
+            b->lrt_cpu = true;
+            static int nlog;
+            if (nlog++ < 16) LOG("[lrt] CPU flush %llx +%#llx: %ux%u at %llx uploaded again\n", (unsigned long long)addr,
+                                 (unsigned long long)size, t->width, t->height, (unsigned long long)t->addr);
+        }
+    }
+    pthread_mutex_unlock(&lrt_lock);
+}
 
 // Host-produced texel data (decoded video, any thread): applied on the render thread at the texture's next use.
 void renderer_upload_rgba(NvnTexture *t, const void *rgba, uint32_t w, uint32_t h, uint32_t stride) {

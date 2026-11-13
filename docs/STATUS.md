@@ -30,6 +30,9 @@ through on it at 60 fps.
   and the brake no longer switches the present path (its 66 ms frames gone; `notes/drops-interp-2026-11-10.md`,
   update 46). Measured with another game sharing the GPU; not on the player's visible 165 Hz window.
 
+- The Wooded Kingdom's poison goo hurts only where it is drawn (update 49): the game reads GPU-drawn textures on the
+  CPU, and they now reach its memory (`notes/invisible-poison-2026-11-13.md`). The boss fight itself not played by hand.
+
 ## Known problems
 
 | Problem | State |

@@ -226,7 +226,7 @@ void plat_heap_check(const char *where) {
 
 // Fatal error (rt_fatal_trace): the last FATAL / exception line of the log in a message box, when there is no console.
 void plat_fatal_notice(void) {
-    if (!g_log_path[0]) return;
+    if (!g_log_path[0] || getenv("ODYSSEY_HIDDEN")) return;  // (hidden test runs: nothing on the player's screen)
     fflush(stderr);
     char text[1600] = "Odyssey Recomp stopped because of an error.";
     FILE *f = fopen(g_log_path, "rb");
