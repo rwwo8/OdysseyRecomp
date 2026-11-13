@@ -25,7 +25,8 @@ code, no assets, no fonts.
 ## Download
 
 **[Download the latest release](https://github.com/rwwo8/OdysseyRecomp/releases/latest)** - Windows (x64):
-`Odyssey Recomp-<version>-windows.zip`.
+`Odyssey Recomp-<version>-windows.zip`. It's also in [RecompLauncher](https://recomplauncher.com/game/odysseyrecomp),
+which installs it, sets it up from your game folder and keeps it updated (Easy Setup, `recomplauncher.json`).
 
 1. Extract the zip into a folder you can write to (Documents or Desktop, not Program Files) and start
    `OdysseyRecomp.exe`. Windows SmartScreen may say "Windows protected your PC" (the program isn't code-signed):

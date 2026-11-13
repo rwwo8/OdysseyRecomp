@@ -16,6 +16,9 @@ bool setup_run(const char *root);
 // nothing changed), SETUP_REBUILD the game code made again from the files there. SETUP_FIRST: setup_run.
 enum { SETUP_FIRST = 0, SETUP_CHANGE = 1, SETUP_REBUILD = 2 };
 bool setup_run_mode(const char *root, int mode);
+// --setup <folder> (RecompLauncher's Easy Setup: recomplauncher.json "prepare"): the setup page's work without a window,
+// "progress <0..1> <step>" lines on stdout. 0 when done, else 2 (the failure's heading and hint printed first).
+int setup_headless(const char *root, const char *game);
 // Setup mode of the menu (menu.mm): it draws the setup page and takes every input while on.
 void menu_setup_mode(bool on);
 // The page itself, drawn by the menu while setup mode is on: its fonts (ImFont *; the output scale is set already).

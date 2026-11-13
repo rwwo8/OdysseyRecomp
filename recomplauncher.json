@@ -1,0 +1,113 @@
+{
+  "$schema": "https://recomplauncher.com/schema/recomplauncher.json",
+  "format": 1,
+  "name": "Odyssey Recomp",
+  "repo": "rwwo8/OdysseyRecomp",
+  "game": {
+    "kind": "folder",
+    "label": "Your own extracted Super Mario Odyssey, version 1.0.0 without updates: the folder that holds its exefs and romfs folders.",
+    "check": { "nup_build_id": "3ca12dfaaf9c82da" }
+  },
+  "prepare": {
+    "program": ["OdysseyRecomp.exe"],
+    "args": ["--setup", "{game}"],
+    "label": "Copying your game files and building the game code (a few minutes, once)",
+    "timeout": 3600
+  },
+  "start": {
+    "program": ["OdysseyRecomp.exe"]
+  },
+  "saves": ["{install}/save", "{install}/odyssey.ini"],
+  "folders": {
+    "saves": [{ "path": "{install}/save" }],
+    "logs": [{ "path": "{install}" }],
+    "mods": [{ "path": "{install}/mods" }]
+  },
+  "actions": [
+    { "id": "mods", "label": "Open the mods folder", "help": "RomFS mods, each in a folder of its own. Switch them on and off in the game's menu (Esc).", "open": "mods" }
+  ],
+  "config": [
+    { "id": "main", "format": "ini", "file": [{ "path": "{install}/odyssey.ini" }] }
+  ],
+  "settings": [
+    {
+      "id": "resolution",
+      "label": "Internal resolution",
+      "help": "What the game draws at, then scaled to your screen. Higher is sharper and needs a faster GPU.",
+      "group": "Display",
+      "choices": [
+        { "label": "1080p", "set": { "resolution": "1080p" } },
+        { "label": "1440p", "set": { "resolution": "1440p" } },
+        { "label": "4K", "set": { "resolution": "4k" } },
+        { "label": "5K", "set": { "resolution": "5k" } },
+        { "label": "6K", "set": { "resolution": "6k" } },
+        { "label": "8K", "set": { "resolution": "8k" } }
+      ],
+      "defaults": { "resolution": "1440p" }
+    },
+    {
+      "id": "frame_interp",
+      "label": "Frame limiter",
+      "help": "120 fps adds an image between each two of the game's frames. Needs a 120 Hz or faster display.",
+      "group": "Display",
+      "choices": [
+        { "label": "60 fps", "set": { "frame_interp": "0" } },
+        { "label": "120 fps", "set": { "frame_interp": "1" } }
+      ],
+      "defaults": { "frame_interp": "0" }
+    },
+    {
+      "id": "window",
+      "label": "Display mode",
+      "group": "Display",
+      "choices": [
+        { "label": "Window", "set": { "fullscreen": "0", "borderless": "0" } },
+        { "label": "Borderless", "set": { "fullscreen": "0", "borderless": "1" } },
+        { "label": "Fullscreen", "set": { "fullscreen": "1", "borderless": "0" } }
+      ],
+      "defaults": { "fullscreen": "0", "borderless": "0" }
+    },
+    {
+      "id": "aspect",
+      "label": "Aspect ratio",
+      "help": "Fill window shows more of the world on ultrawide screens.",
+      "group": "Display",
+      "choices": [
+        { "label": "16:9", "set": { "aspect": "16:9" } },
+        { "label": "Fill window", "set": { "aspect": "fill" } }
+      ],
+      "defaults": { "aspect": "16:9" }
+    },
+    {
+      "id": "upscaler",
+      "label": "Upscaler",
+      "help": "How the picture is scaled to your screen. AMD FSR 1 works on any GPU.",
+      "group": "Image",
+      "choices": [
+        { "label": "AMD FSR 1", "set": { "upscaler": "fsr1" } },
+        { "label": "Bilinear", "set": { "upscaler": "bilinear" } }
+      ],
+      "defaults": { "upscaler": "fsr1" }
+    },
+    {
+      "id": "antialias",
+      "label": "Anti-aliasing",
+      "group": "Image",
+      "choices": [
+        { "label": "Off", "set": { "antialias": "off" } },
+        { "label": "SMAA", "set": { "antialias": "smaa" } }
+      ],
+      "defaults": { "antialias": "off" }
+    },
+    {
+      "id": "show_fps",
+      "label": "Show FPS",
+      "group": "Display",
+      "choices": [
+        { "label": "Off", "set": { "show_fps": "0" } },
+        { "label": "On", "set": { "show_fps": "1" } }
+      ],
+      "defaults": { "show_fps": "0" }
+    }
+  ]
+}

@@ -282,6 +282,46 @@ static void start_work(void) {
     else fail(FAIL_COPY);
 }
 
+// RecompLauncher (recomplauncher.com/sdk, "prepare"): the store runs this on its own setup screen after it has checked
+// the player's copy - the same work as the page, no window, its progress as "progress <fraction> <text>" lines.
+int setup_headless(const char *root, const char *game) {
+    g_root = root;
+    pthread_mutex_lock(&g_lock);
+    g_pick = game;
+    pthread_mutex_unlock(&g_lock);
+    g_code_only = false;
+    g_mode = SETUP_FIRST;
+    g_state = ST_BUSY;
+    LOG("[setup] without a window (--setup): %s\n", game);
+    pthread_t th;
+    if (pthread_create(&th, NULL, work, NULL) != 0) { printf("error Setup didn't start\n"); fflush(stdout); return 2; }
+    std::string last;
+    float lastf = -1;
+    while (g_state == ST_BUSY) {
+        pthread_mutex_lock(&g_lock);
+        std::string step = g_step;
+        pthread_mutex_unlock(&g_lock);
+        float f = g_frac;
+        if (step != last || f - lastf >= 0.01f) {
+            printf("progress %.3f %s\n", f, step.c_str());
+            fflush(stdout);
+            last = step, lastf = f;
+        }
+        SDL_Delay(250);
+    }
+    pthread_join(th, NULL);
+    if (g_state == ST_DONE) {
+        printf("progress 1 Ready to play\n");
+        fflush(stdout);
+        return 0;
+    }
+    pthread_mutex_lock(&g_lock);
+    printf("error %s. %s\n", g_fail_head.c_str(), g_fail_hint.c_str());
+    pthread_mutex_unlock(&g_lock);
+    fflush(stdout);
+    return 2;
+}
+
 static void SDLCALL picked(void *, const char *const *files, int) {
     if (!files || !files[0]) return;  // (cancelled, or the dialog failed)
     pthread_mutex_lock(&g_lock);

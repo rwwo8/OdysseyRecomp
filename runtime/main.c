@@ -168,12 +168,13 @@ int main(int argc, char **argv) {
 #endif
     const char *root = "extracted";  // (in the data root)
     bool build_romfs = false;
-    const char *prepare = NULL;
+    const char *prepare = NULL, *setup_from = NULL;
     static char arg_root[1024];
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--play")) continue;  // (older scripts: the game always starts straight away now)
         else if (!strcmp(argv[i], "--build-romfs")) build_romfs = true;
         else if (!strcmp(argv[i], "--prepare-shaders") && i + 1 < argc) prepare = argv[++i];
+        else if (!strcmp(argv[i], "--setup") && i + 1 < argc) setup_from = argv[++i];  // (RecompLauncher: recomplauncher.json)
         else if (!strcmp(argv[i], "--data-root") && i + 1 < argc) {  // (the game's own, for its shader preparation)
 #ifdef _WIN32
             _putenv_s("ODYSSEY_DATA_ROOT", argv[++i]);
@@ -199,6 +200,8 @@ int main(int argc, char **argv) {
 #else
     (void)prepare;
 #endif
+    // --setup <folder>: the first-start setup without a window (RecompLauncher's Easy Setup runs it: recomplauncher.json)
+    if (setup_from) return setup_headless(root, setup_from);
     if (build_romfs) {  // --build-romfs: <root>/romfs.bin from <root>/romfs, as the start screen's setup does
         char dir[1100], out[1100], why[256];
         snprintf(dir, sizeof dir, "%s/romfs", root);

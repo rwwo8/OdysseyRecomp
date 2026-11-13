@@ -284,7 +284,7 @@ dist:
 	cp -R build/zig-slim "$(DIST)/zig"
 	cp runtime/cpu.h runtime/simd.h runtime/simd_fp.h runtime/gamelib.h tools/gamelib_entry.c runtime/hle/hle_symbols.txt \
 	    "$(DIST)/gamelib-src/"
-	cp runtime/nvn/vulkan/known_programs.txt third_party/imgui/misc/fonts/Roboto-Medium.ttf README.md LICENSE "$(DIST)/"
+	cp runtime/nvn/vulkan/known_programs.txt third_party/imgui/misc/fonts/Roboto-Medium.ttf README.md LICENSE recomplauncher.json "$(DIST)/"
 	tools/dist_licenses.sh "$(DIST)"  # (every shipped component's licence and source: licenses/README.txt)
 	PATH="$(CURDIR)/build/deps-win/bin:$$PATH" ldd $(WIN_B)/OdysseyRecomp.exe | awk '(/ucrt64/ || /deps-win/) && !/vulkan-1/ {print $$3}' | \
 	    sort -u | xargs -I{} cp -u {} "$(DIST)/"
