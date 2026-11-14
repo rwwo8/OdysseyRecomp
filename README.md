@@ -49,9 +49,17 @@ which installs it, sets it up from your game folder and keeps it updated (Easy S
 - **Window / Borderless / Fullscreen**, F11 or Alt+Enter.
 - **Controllers** - Xbox, PlayStation, Switch and others; Nintendo or Xbox / PS button layout, and the game's own
   button prompts drawn as your controller's buttons.
-- **Mouse and keyboard** - mouse camera, every input rebindable (keyboard, controller and mouse buttons).
+- **Motion controls** - the gyro and accelerometer of PlayStation, Switch Pro and Steam controllers drive the game's
+  motion moves (motion cap throws, roll boost); without them, a **Shake** binding (keyboard R by default, any
+  controller or mouse button) does the shake.
+- **Two players** - the game's own two-player mode: a second controller plays Cappy.
+- **Mouse and keyboard** - mouse camera (sensitivity up to 1000%, faster than a stick can turn), every input
+  rebindable (keyboard, controller and mouse buttons).
 - **Mods** - RomFS mods (costumes, textures, music, levels) from a `mods` folder, switched on and off in the menu.
-- **A launcher** - Play, Settings, Controls, and a Game page to choose another game folder or rebuild the game code.
+- **A launcher** - Play, Settings, Controls, and a Game page to choose another game folder or rebuild the game code;
+  it tells you when a new version is out and installs it in place (your saves, settings and mods stay).
+- **Shaders built ahead** - the game's shaders are compiled before the first start, and every pipeline the game has
+  drawn (ours from a run through every kingdom, and your own) is built before it is needed, so new places don't stutter.
 
 ## Status
 
@@ -109,6 +117,7 @@ The in-game menu: **F1** or **Esc** (controller: Home / Guide button) - video, a
 | + / - | Enter / Backspace | Start / Back |
 | Stick clicks | F / Num 0 | stick clicks |
 | D-pad | arrow keys | d-pad |
+| Shake (motion) | R | gyro, or any button you bind |
 
 Fullscreen: F11 or Alt+Enter.
 

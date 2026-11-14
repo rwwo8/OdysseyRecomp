@@ -291,8 +291,18 @@ int setup_headless(const char *root, const char *game) {
     pthread_mutex_unlock(&g_lock);
     g_code_only = false;
     g_mode = SETUP_FIRST;
+    // (an update through RecompLauncher runs it again: what is set up already isn't copied again - ready as it is, or
+    // only the game code made again for the new version)
+    std::string r = root;
+    if (setup_ready(root)) {
+        LOG("[setup] without a window (--setup): set up already\n");
+        printf("progress 1 Ready to play\n");
+        fflush(stdout);
+        return 0;
+    }
+    if (loader_peek_game((r + "/exefs/main").c_str()) == GAME_ODYSSEY && data_there(r)) g_code_only = true;
     g_state = ST_BUSY;
-    LOG("[setup] without a window (--setup): %s\n", game);
+    LOG("[setup] without a window (--setup): %s%s\n", game, g_code_only ? " (the game code only: the files are there)" : "");
     pthread_t th;
     if (pthread_create(&th, NULL, work, NULL) != 0) { printf("error Setup didn't start\n"); fflush(stdout); return 2; }
     std::string last;

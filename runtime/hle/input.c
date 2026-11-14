@@ -6,6 +6,7 @@
 #include <SDL3/SDL.h>
 #include <ctype.h>
 #include <math.h>
+#include <pthread.h>
 #include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,6 +29,9 @@ static _Atomic uint64_t key_buttons, pad_buttons;
 static _Atomic int32_t key_lx, key_ly, key_rx, key_ry, pad_lx, pad_ly, pad_rx, pad_ry;
 static uint8_t keys_down[SDL_SCANCODE_COUNT];
 static SDL_Gamepad *pad;
+// Two-player mode (0.2.4): the game's own (a second player throws and steers Cappy). Player 1 is the keyboard, the
+// mouse and the first controller; player 2 the second controller connected (npad id 1). ODYSSEY_LOG_PAD2=1: its use.
+static SDL_Gamepad *pad2;
 static _Atomic int64_t sampling;
 
 // Host keys / buttons held by a test script (ODYSSEY_HOST_INPUT, input_frame): they go through the bindings
@@ -46,13 +50,16 @@ static _Atomic int32_t mouse_ax, mouse_ay;   // movement since the stick was las
 static uint8_t mouse_down[8];
 static bool held_mouse(int b) { return mouse_held && b > 0 && b < 8 && mouse_down[b]; }
 static int32_t clamp_axis(int32_t v);
+extern bool menu_input_captured(void);  // runtime/ui/menu.mm: overlay menu or name entry up (it has the keys / pad)
 
 // Through the bindings (runtime/hle/bindings.c: g_bind_key), read on every key event, so a rebind applies at once.
+static _Atomic bool key_shake, pad_shake;  // (the Shake binding held: input_motion)
 static void recompute_keyboard(void) {
     uint64_t b = 0;
     for (int i = 0; i < BIND_PAD_COUNT; i++)
         if (held_key(g_bind_key[i]) || held_mouse(g_bind_mouse[i])) b |= 1ull << i;
-    key_buttons = b;
+    key_shake = (b >> BIND_SHAKE) & 1;
+    key_buttons = b & ~(1ull << BIND_SHAKE);
     key_lx = (held_key(g_bind_key[BIND_LS_RIGHT]) - held_key(g_bind_key[BIND_LS_LEFT])) * 32767;
     key_ly = (held_key(g_bind_key[BIND_LS_UP]) - held_key(g_bind_key[BIND_LS_DOWN])) * 32767;
     key_rx = (held_key(g_bind_key[BIND_RS_RIGHT]) - held_key(g_bind_key[BIND_RS_LEFT])) * 32767;
@@ -86,7 +93,8 @@ static void recompute_pad(void) {
     for (int i = 0; i < BIND_PAD_COUNT; i++) hosts[i] = names ? bind_face_swap(g_bind_pad[i]) : g_bind_pad[i];
     for (int i = 0; i < BIND_PAD_COUNT; i++)
         if (hosts[i] >= 0 && hosts[i] < PADB_HOST_COUNT && (host >> hosts[i] & 1)) b |= 1ull << i;
-    pad_buttons = b;
+    pad_shake = (b >> BIND_SHAKE) & 1;
+    pad_buttons = b & ~(1ull << BIND_SHAKE);
     if (!pad || host_test) { pad_lx = test_lx, pad_ly = test_ly, pad_rx = pad_ry = 0; return; }
     int32_t x = SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTX), y = -SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTY);
     deadzone(&x, &y);
@@ -171,6 +179,7 @@ void input_handle_event(const SDL_Event *e) {
         int n = 0;
         SDL_JoystickID *ids = SDL_GetGamepads(&n);
         if (n > 0 && !pad) { pad = SDL_OpenGamepad(ids[0]); LOG("[input] gamepad: %s\n", SDL_GetGamepadName(pad)); note_family(); }
+        if (n > 1 && !pad2) { pad2 = SDL_OpenGamepad(ids[1]); LOG("[input] player 2 gamepad: %s\n", SDL_GetGamepadName(pad2)); }
         SDL_free(ids);
     }
     switch (e->type) {
@@ -198,9 +207,18 @@ void input_handle_event(const SDL_Event *e) {
         break;
     case SDL_EVENT_GAMEPAD_ADDED:
         if (!pad) { pad = SDL_OpenGamepad(e->gdevice.which); LOG("[input] gamepad: %s\n", SDL_GetGamepadName(pad)); note_family(); }
+        else if (!pad2 && SDL_GetGamepadID(pad) != e->gdevice.which) {
+            pad2 = SDL_OpenGamepad(e->gdevice.which);
+            LOG("[input] player 2 gamepad: %s\n", SDL_GetGamepadName(pad2));
+        }
         break;
     case SDL_EVENT_GAMEPAD_REMOVED:
-        if (pad && SDL_GetGamepadID(pad) == e->gdevice.which) { SDL_CloseGamepad(pad); pad = NULL; note_family(); }
+        if (pad2 && SDL_GetGamepadID(pad2) == e->gdevice.which) { SDL_CloseGamepad(pad2); pad2 = NULL; }
+        if (pad && SDL_GetGamepadID(pad) == e->gdevice.which) {
+            SDL_CloseGamepad(pad);
+            pad = pad2, pad2 = NULL;  // (the second one carries on as player 1)
+            note_family();
+        }
         recompute_pad();
         break;
     case SDL_EVENT_GAMEPAD_AXIS_MOTION: case SDL_EVENT_GAMEPAD_BUTTON_DOWN: case SDL_EVENT_GAMEPAD_BUTTON_UP:
@@ -227,23 +245,59 @@ void input_mouse_update(SDL_Window *w) {
 
 // The mouse's movement as a right stick: its speed over the last few milliseconds, 600 pixels a second at 100%
 // sensitivity = the stick all the way (faster turns the camera no faster: the game's own top speed)
+// Past full tilt (a fast flick, or a high sensitivity): the rest turns the camera directly (camera_stick_hook), so the
+// mouse isn't held to the stick's top speed (GitHub #10: "too slow even at the highest sensitivity").
+static _Atomic float mouse_extra_x, mouse_extra_y;  // (stick units past full tilt, 1.0 = one more full tilt)
 static void mouse_stick(int32_t *rx, int32_t *ry) {
     static uint64_t last;
-    static int32_t vx, vy;
-    if (!mouse_held) { *rx = *ry = 0; last = 0; return; }
+    static double vx, vy;
+    if (!mouse_held) { *rx = *ry = 0; last = 0; mouse_extra_x = mouse_extra_y = 0; return; }
     uint64_t now = plat_now_ns();
     if (!last) last = now;
     double ms = (now - last) / 1e6;
     if (ms >= 4) {
         double k = g_settings.mouse_sens / 100.0 * 32767.0 / 600.0 * 1000.0 / ms / 16.0;
         int32_t ax = atomic_exchange(&mouse_ax, 0), ay = atomic_exchange(&mouse_ay, 0);
-        int32_t nx = clamp_axis((int32_t)lround(ax * k)), ny = clamp_axis((int32_t)lround(-ay * k));
+        double nx = ax * k, ny = -ay * k;
         if (g_settings.mouse_invert_y) ny = -ny;
         vx = (vx + nx) / 2, vy = (vy + ny) / 2;  // (two windows' average: steadier at a high polling rate)
-        if (!nx && !ny && abs(vx) < 400 && abs(vy) < 400) vx = vy = 0;
+        if (!ax && !ay && fabs(vx) < 400 && fabs(vy) < 400) vx = vy = 0;
         last = now;
+        mouse_extra_x = (float)((vx - clamp_axis((int32_t)lround(vx))) / 32767.0);
+        mouse_extra_y = (float)((vy - clamp_axis((int32_t)lround(vy))) / 32767.0);
     }
-    *rx = vx, *ry = vy;
+    *rx = clamp_axis((int32_t)lround(vx)), *ry = clamp_axis((int32_t)lround(vy));
+}
+
+// The camera's stick (ProjectCameraInput / al::SimpleCameraInput::calcInputStick(sead::Vector2f *out)): the game's
+// value, plus the mouse past full tilt.
+static GuestFn g_cam_stick[2];
+static void camera_stick_call(Cpu *c, int which) {
+    uint64_t out = c->x[1];
+    static bool told[2];
+    if (!told[which]) { told[which] = true; LOG("[input] the camera's stick read through the mouse hook (%s)\n", which ? "SimpleCameraInput" : "ProjectCameraInput"); }
+    g_cam_stick[which](c);
+    float ex = mouse_extra_x, ey = mouse_extra_y;
+    if (out && (ex != 0 || ey != 0) && !menu_input_captured()) {
+        float *v = (float *)(uintptr_t)out;
+        v[0] += ex, v[1] += ey;
+    }
+}
+static void camera_stick_project(Cpu *c) { camera_stick_call(c, 0); }
+static void camera_stick_simple(Cpu *c) { camera_stick_call(c, 1); }
+void input_camera_hooks(void) {
+    static bool done;
+    if (done) return;
+    done = true;
+    static const char *const names[2] = {"_ZNK18ProjectCameraInput14calcInputStickEPN4sead7Vector2IfEE",
+                                         "_ZNK2al17SimpleCameraInput14calcInputStickEPN4sead7Vector2IfEE"};
+    HostFn fns[2] = {camera_stick_project, camera_stick_simple};
+    for (int i = 0; i < 2; i++) {
+        uint64_t a = loader_find_symbol(names[i]);
+        if (!a) continue;
+        g_cam_stick[i] = dispatch_lookup(a);
+        hle_override(a, fns[i], i ? "SimpleCameraInput::calcInputStick (mouse)" : "ProjectCameraInput::calcInputStick (mouse)");
+    }
 }
 
 // Scripted input for testing: ODYSSEY_INPUT="frame:BUTTON:frames,..." (BUTTON = A,B,X,Y,L,R,ZL,ZR,PLUS,
@@ -440,12 +494,52 @@ void input_frame(uint64_t frame) {
     script_ry = ry;
 }
 
-extern bool menu_input_captured(void);  // runtime/ui/menu.mm: overlay menu or name entry up (it has the keys / pad)
 
 // Buttons held right now (keyboard, gamepad, test script), independent of whether the game polls (movies).
 uint64_t input_buttons_now(void) { return (menu_input_captured() ? 0 : key_buttons | pad_buttons) | script_buttons; }
 
 static int32_t clamp_axis(int32_t v) { return v > 32767 ? 32767 : v < -32767 ? -32767 : v; }
+
+// Player 2's state (npad id 1): the second controller through the same bindings.
+static void fill_state_p2(uint8_t *s) {
+    SDL_Gamepad *p = pad2;
+    if (!p || host_test || menu_input_captured()) return;
+    uint32_t host = 0;
+    for (int i = 0; i < SDL_GAMEPAD_BUTTON_COUNT; i++)
+        if (SDL_GetGamepadButton(p, (SDL_GamepadButton)i)) host |= 1u << i;
+    if (SDL_GetGamepadAxis(p, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > 16000) host |= 1u << PADB_LTRIGGER;
+    if (SDL_GetGamepadAxis(p, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > 16000) host |= 1u << PADB_RTRIGGER;
+    uint64_t b = 0;
+    bool names = bind_names_layout();
+    for (int i = 0; i < BIND_PAD_COUNT; i++) {
+        int h = names ? bind_face_swap(g_bind_pad[i]) : g_bind_pad[i];
+        if (i != BIND_SHAKE && h >= 0 && h < PADB_HOST_COUNT && (host >> h & 1)) b |= 1ull << i;
+    }
+    int32_t lx = SDL_GetGamepadAxis(p, SDL_GAMEPAD_AXIS_LEFTX), ly = -SDL_GetGamepadAxis(p, SDL_GAMEPAD_AXIS_LEFTY);
+    int32_t rx = SDL_GetGamepadAxis(p, SDL_GAMEPAD_AXIS_RIGHTX), ry = -SDL_GetGamepadAxis(p, SDL_GAMEPAD_AXIS_RIGHTY);
+    deadzone(&lx, &ly);
+    deadzone(&rx, &ry);
+    lx = clamp_axis(lx), ly = clamp_axis(ly), rx = clamp_axis(rx), ry = clamp_axis(ry);
+    if (lx < -16000) b |= 1ull << 16;
+    if (ly > 16000) b |= 1ull << 17;
+    if (lx > 16000) b |= 1ull << 18;
+    if (ly < -16000) b |= 1ull << 19;
+    if (rx < -16000) b |= 1ull << 20;
+    if (ry > 16000) b |= 1ull << 21;
+    if (rx > 16000) b |= 1ull << 22;
+    if (ry < -16000) b |= 1ull << 23;
+    *(uint64_t *)(s + 8) = b;
+    *(int32_t *)(s + 16) = lx;
+    *(int32_t *)(s + 20) = ly;
+    *(int32_t *)(s + 24) = rx;
+    *(int32_t *)(s + 28) = ry;
+    *(uint32_t *)(s + 32) = 1;  // IsConnected
+    static int log = -1;
+    if (log < 0) log = getenv("ODYSSEY_LOG_PAD2") != NULL;
+    static uint64_t last;
+    if (log && b != last) LOG("[input] player 2 buttons %#llx\n", (unsigned long long)b);
+    last = b;
+}
 
 // NpadFullKeyState / NpadHandheldState / NpadJoy*State share this layout (0x28 bytes):
 // {int64 sampling, u64 buttons, AnalogStick L {x,y}, AnalogStick R {x,y}, u32 attributes}
@@ -456,7 +550,8 @@ static void fill_state(Cpu *c) {
     *(int64_t *)s = ++sampling;
     static int nlog;
     if (nlog < 6 && (sampling % 600) == 1) { nlog++; LOG("[input] GetNpadState id %#x lr %llx\n", id, c->x[30]); }
-    if (id != 0) return;  // docked: only player 1 (FullKey); Handheld stays disconnected
+    if (id == 1) { fill_state_p2(s); return; }  // (two-player mode: the second controller)
+    if (id != 0) return;  // docked: player 1 (FullKey); Handheld stays disconnected
     extern uint64_t g_watch_lo, g_watch_hi;
     if (id == 0 && !g_pad_obj) g_pad_obj = c->x[1] - 8;
     if (id == 0 && !g_watch_lo && getenv("ODYSSEY_WATCH_PAD")) {
@@ -524,12 +619,15 @@ HLE_FUNC("_ZN2nn3hid13GetNpadStatesEPNS0_17NpadJoyRightStateEiRKj", hid_states_r
 HLE_FUNC("_ZN2nn3hid21ShowControllerSupportEPNS0_27ControllerSupportResultInfoERKNS0_20ControllerSupportArgE",
          hid_show_controller_support) {
     uint8_t *out = (uint8_t *)(uintptr_t)c->x[0];
+    const int8_t *arg = (const int8_t *)(uintptr_t)c->x[1];  // ControllerSupportArg: {s8 player count min, max, ...}
+    int want = arg ? arg[1] : 1, players = want >= 2 && pad2 ? 2 : 1;
     if (out) {
         memset(out, 0, 8);
-        out[0] = 1;
+        out[0] = (uint8_t)players;
     }
     static int nlog;
-    if (nlog++ < 4) LOG("[input] ShowControllerSupport: answered with 1 player on controller 1\n");
+    if (nlog++ < 8) LOG("[input] ShowControllerSupport (players %d..%d): answered with %d player%s%s\n", arg ? arg[0] : 0, want,
+                        players, players > 1 ? "s" : "", players < want ? " (a second controller plays player 2)" : "");
     c->x[0] = RES_OK;
 }
 
@@ -538,7 +636,7 @@ HLE_FUNC("_ZN2nn3hid15GetNpadStyleSetERKj", hid_style_set) {
     uint32_t id = *(uint32_t *)(uintptr_t)c->x[0];
     static int nlog;
     if (nlog++ < 4) LOG("[input] GetNpadStyleSet id %#x\n", id);
-    c->x[0] = id == 0 ? 1 : 0;  // docked: no handheld controller
+    c->x[0] = id == 0 || (id == 1 && pad2) ? 1 : 0;  // docked: no handheld controller; player 2: a second controller
 }
 
 // BindNpadStyleSetUpdateEvent(id, SystemEventType*, clear mode): signaled once so the game sees a
@@ -600,4 +698,116 @@ HLE_FUNC("_ZN2nn3hid22GetVibrationDeviceInfoEPNS0_19VibrationDeviceInfoERKNS0_21
     uint32_t h = *(uint32_t *)(uintptr_t)c->x[1];
     info[0] = 1;        // VibrationDeviceType_LinearResonantActuator
     info[1] = h & 1;    // position: left / right
+}
+
+// ---- Motion (0.2.4): the game's six-axis sensor (nn::hid GetSixAxisSensorHandles / StartSixAxisSensor /
+// GetSixAxisSensorStates, imported by main - the SDK's own versions read the hid service's shared memory, which never
+// moves) answered from the controller's gyro and accelerometer through SDL (PlayStation, Switch Pro, Steam Controller
+// and others that have them): the motion cap throws (a shake: homing, up, down and spin throws), the roll boost, the
+// motion moves of the minigames. Axes as Switch emulators map SDL's (accel in g, gyro in turns per second). For
+// controllers without motion and the keyboard, the Shake binding (Controls tab; keyboard R by default) shakes the
+// controller as a quick flick would. ODYSSEY_LOG_MOTION=1: the values the game gets, now and then.
+typedef struct {
+    int64_t delta_ns, sampling;
+    float acc[3], gyro[3], angle[3], dir[9];
+    uint32_t attr, pad_;
+} SixAxisState;
+_Static_assert(sizeof(SixAxisState) == 0x60, "nn::hid::SixAxisSensorState");
+
+static SDL_Gamepad *motion_pad;   // (the pad its sensors were switched on for)
+static bool motion_gyro, motion_acc;
+static float motion_dir[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1}, motion_angle[3];
+static uint64_t motion_last_ns;
+static int64_t motion_sampling;
+static pthread_mutex_t motion_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void motion_sensors_on(void) {  // (motion_lock)
+    SDL_Gamepad *p = pad;
+    if (p == motion_pad) return;
+    motion_pad = p;
+    motion_gyro = p && SDL_GamepadHasSensor(p, SDL_SENSOR_GYRO) && SDL_SetGamepadSensorEnabled(p, SDL_SENSOR_GYRO, true);
+    motion_acc = p && SDL_GamepadHasSensor(p, SDL_SENSOR_ACCEL) && SDL_SetGamepadSensorEnabled(p, SDL_SENSOR_ACCEL, true);
+    LOG("[input] motion: %s%s\n", motion_gyro ? "gyro" : "no gyro", motion_acc ? ", accelerometer" : ", no accelerometer");
+}
+
+// One state, now: what the sensors read (or the Shake binding's flick), the orientation turned on by the gyro.
+static void motion_sample(SixAxisState *s) {
+    pthread_mutex_lock(&motion_lock);
+    motion_sensors_on();
+    uint64_t now = plat_now_ns();
+    double dt = motion_last_ns ? (now - motion_last_ns) / 1e9 : 1.0 / 60;
+    if (dt > 0.1) dt = 0.1;
+    motion_last_ns = now;
+    memset(s, 0, sizeof *s);
+    s->delta_ns = (int64_t)(dt * 1e9);
+    s->sampling = ++motion_sampling;
+    s->acc[2] = -1;  // (at rest, lying flat)
+    float d[3];
+    bool menu = menu_input_captured();
+    if (!menu && !host_test && motion_acc && SDL_GetGamepadSensorData(motion_pad, SDL_SENSOR_ACCEL, d, 3)) {
+        s->acc[0] = -d[0] / SDL_STANDARD_GRAVITY, s->acc[1] = d[2] / SDL_STANDARD_GRAVITY, s->acc[2] = -d[1] / SDL_STANDARD_GRAVITY;
+    }
+    if (!menu && !host_test && motion_gyro && SDL_GetGamepadSensorData(motion_pad, SDL_SENSOR_GYRO, d, 3)) {
+        const float k = 1.0f / (2.0f * 3.14159265f);  // (rad/s -> turns/s)
+        s->gyro[0] = d[0] * k, s->gyro[1] = -d[2] * k, s->gyro[2] = d[1] * k;
+    }
+    if (!menu && (key_shake || pad_shake)) {  // a flick back and forth, every 50 ms, while it is held
+        bool ph = (now / 50000000ull) & 1;
+        s->acc[0] = ph ? 2.5f : -2.5f;
+        s->acc[1] = ph ? -1.5f : 1.5f;
+        s->gyro[2] = ph ? 2.0f : -2.0f;
+    }
+    // the orientation: turned by the gyro over dt (a small rotation, then kept orthonormal)
+    float wx = s->gyro[0] * 6.2831853f * (float)dt, wy = s->gyro[1] * 6.2831853f * (float)dt, wz = s->gyro[2] * 6.2831853f * (float)dt;
+    float R[9] = {1, -wz, wy, wz, 1, -wx, -wy, wx, 1}, M[9];
+    for (int r = 0; r < 3; r++)
+        for (int c2 = 0; c2 < 3; c2++)
+            M[r * 3 + c2] = motion_dir[r * 3] * R[c2] + motion_dir[r * 3 + 1] * R[3 + c2] + motion_dir[r * 3 + 2] * R[6 + c2];
+    for (int r = 0; r < 3; r++) {  // (Gram-Schmidt on the rows)
+        float *v = M + r * 3;
+        for (int q = 0; q < r; q++) {
+            float *u = M + q * 3, dp = v[0] * u[0] + v[1] * u[1] + v[2] * u[2];
+            v[0] -= dp * u[0], v[1] -= dp * u[1], v[2] -= dp * u[2];
+        }
+        float l = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+        if (l > 1e-6f) v[0] /= l, v[1] /= l, v[2] /= l;
+    }
+    memcpy(motion_dir, M, sizeof M);
+    for (int i = 0; i < 3; i++) motion_angle[i] += s->gyro[i] * (float)dt;
+    memcpy(s->angle, motion_angle, sizeof s->angle);
+    memcpy(s->dir, motion_dir, sizeof s->dir);
+    s->attr = 1;  // IsConnected
+    static int log = -1;
+    if (log < 0) log = getenv("ODYSSEY_LOG_MOTION") != NULL;
+    if (log && ((motion_sampling % 120) == 1 || key_shake || pad_shake))
+        LOG("[input] motion acc %.2f %.2f %.2f gyro %.2f %.2f %.2f\n", s->acc[0], s->acc[1], s->acc[2], s->gyro[0], s->gyro[1], s->gyro[2]);
+    pthread_mutex_unlock(&motion_lock);
+}
+
+// GetSixAxisSensorHandles(SixAxisSensorHandle *out, int count, const NpadIdType &id, NpadStyleSet style) -> count:
+// a handle {style index, npad id, device index} per device - two for a Joy-Con pair, one otherwise.
+HLE_FUNC("_ZN2nn3hid23GetSixAxisSensorHandlesEPNS0_19SixAxisSensorHandleEiRKjNS_4util10BitFlagSetILi32ENS0_12NpadStyleTagEEE",
+         hid_sixaxis_handles) {
+    uint32_t *out = (uint32_t *)(uintptr_t)c->x[0];
+    int count = (int)c->x[1];
+    uint32_t id = *(uint32_t *)(uintptr_t)c->x[2], style = (uint32_t)c->x[3];
+    int n = count < 1 ? 0 : (style & 4) && count >= 2 ? 2 : 1;  // (bit 2: JoyDual)
+    uint32_t type = style & 1 ? 3 : style & 2 ? 4 : style & 4 ? 5 : 3;
+    for (int i = 0; i < n; i++) out[i] = type | (id & 0xFF) << 8 | (uint32_t)i << 16;
+    static int nlog;
+    if (nlog++ < 4) LOG("[input] GetSixAxisSensorHandles id %#x style %#x: %d\n", id, style, n);
+    c->x[0] = (uint64_t)n;
+}
+HLE_FUNC("_ZN2nn3hid18StartSixAxisSensorERKNS0_19SixAxisSensorHandleE", hid_sixaxis_start) {
+    pthread_mutex_lock(&motion_lock);
+    motion_sensors_on();
+    pthread_mutex_unlock(&motion_lock);
+    (void)c;
+}
+// GetSixAxisSensorStates(SixAxisSensorState *out, int count, const SixAxisSensorHandle &) -> how many, newest first
+HLE_FUNC("_ZN2nn3hid22GetSixAxisSensorStatesEPNS0_18SixAxisSensorStateEiRKNS0_19SixAxisSensorHandleE", hid_sixaxis_states) {
+    SixAxisState *out = (SixAxisState *)(uintptr_t)c->x[0];
+    if ((int)c->x[1] < 1 || !out) { c->x[0] = 0; return; }
+    motion_sample(out);
+    c->x[0] = 1;
 }

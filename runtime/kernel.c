@@ -158,15 +158,30 @@ static void query_memory(uint64_t addr, uint64_t out) {
             return;
         }
         if (addr < r->addr) {
-            info[0] = prev_end;
-            info[1] = r->addr - prev_end;
+            if (addr < GUEST_LO) {  // (below the window: not the guest's either, as past its end below)
+                info[0] = 0;
+                info[1] = GUEST_LO;
+                info[2] = 0x10;  // MemoryState_Inaccessible
+            } else {
+                info[0] = prev_end > GUEST_LO ? prev_end : GUEST_LO;
+                info[1] = r->addr - info[0];
+            }
             memcpy((void *)out, info, 0x28);
             return;
         }
         prev_end = r->addr + r->size;
     }
-    info[0] = prev_end;
-    info[1] = (1ull << 39) - prev_end;
+    // Past the guest's window nothing is reserved for it (the host's own memory may be there): inaccessible, as the
+    // console's kernel says of what lies outside the address space - not free, or the SDK could map shared memory
+    // there (a boot crash reading the touch screen's shared memory at 0x75c2004420, 2026-11-14)
+    if (prev_end < GUEST_HI && addr < GUEST_HI) {
+        info[0] = prev_end;
+        info[1] = GUEST_HI - prev_end;
+    } else {
+        info[0] = prev_end > GUEST_HI ? prev_end : GUEST_HI;
+        info[1] = (1ull << 39) - info[0];
+        info[2] = 0x10;  // MemoryState_Inaccessible
+    }
     memcpy((void *)out, info, 0x28);
 }
 
@@ -810,6 +825,11 @@ static void svc_impl(Cpu *c, uint32_t imm, uint64_t pc) {
         KObject *o = handle_get((uint32_t)x[0]);
         if (!o || o->type != KOBJ_SHMEM) { x[0] = R_INVALID_HANDLE; break; }
         KSharedMem *s = (KSharedMem *)o;
+        if (x[1] < GUEST_LO || x[1] + x[2] > GUEST_HI) {  // (outside the reserved window: not the guest's memory)
+            LOG("[kernel] MapSharedMemory at %llx+%llx: outside the guest's window\n", (unsigned long long)x[1], (unsigned long long)x[2]);
+            x[0] = 0xD401;  // (invalid memory region)
+            break;
+        }
         memset((void *)x[1], 0, x[2]);
         s->guest_addr = x[1];  // HLE services write straight into the guest's mapping
         region_add(x[1], x[2], 6, 3);

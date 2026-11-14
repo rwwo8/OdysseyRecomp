@@ -40,6 +40,7 @@ cp "$B/OdysseyRecomp" "$U/"
 llvm-strip --strip-debug "$U/OdysseyRecomp"  # (symbols stay: crash backtraces name functions)
 cp docs/icon/icon_512.png "$U/icon.png"
 cp third_party/imgui/misc/fonts/Roboto-Medium.ttf runtime/nvn/vulkan/known_programs.txt README.md LICENSE "$U/"
+[ ! -f runtime/nvn/vulkan/known_pipes.bin ] || cp runtime/nvn/vulkan/known_pipes.bin "$U/"
 [ -d "$L/helper/odysseygen" ] || { echo "no game code generator helper: tools/linux/gen_helper.sh $ARCH first"; exit 1; }
 cp -R "$L/helper/odysseygen" build/zig "$U/"
 mkdir "$U/gamelib-src"

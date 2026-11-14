@@ -114,7 +114,7 @@ void settings_load(void) {
         if (!strcmp(key, "fullscreen")) g_settings.fullscreen = atoi(val) != 0;
         else if (!strcmp(key, "borderless")) g_settings.borderless = atoi(val) != 0;
         else if (!strcmp(key, "mouse_camera")) g_settings.mouse_camera = atoi(val) != 0;
-        else if (!strcmp(key, "mouse_sensitivity")) g_settings.mouse_sens = atoi(val) < 10 ? 10 : atoi(val) > 400 ? 400 : atoi(val);
+        else if (!strcmp(key, "mouse_sensitivity")) g_settings.mouse_sens = atoi(val) < 10 ? 10 : atoi(val) > 1000 ? 1000 : atoi(val);
         else if (!strcmp(key, "mouse_invert_y")) g_settings.mouse_invert_y = atoi(val) != 0;
         else if (!strcmp(key, "mod_off")) settings_set_mod_off(val, true);
         else if (!strcmp(key, "volume")) g_settings.volume = (float)atof(val);
@@ -124,6 +124,7 @@ void settings_load(void) {
         else if (!strcmp(key, "vibration")) g_settings.rumble = atoi(val) != 0;
         else if (!strcmp(key, "stick_deadzone")) g_settings.stick_deadzone = atoi(val) < 0 ? 0 : atoi(val) > 40 ? 40 : atoi(val);
         else if (!strcmp(key, "resolution")) {
+            g_settings.res_chosen = true;
             int n = atoi(val);
             // (the menu's names too: "4k" alone read as 4 = 8K)
             if (!strcasecmp(val, "1080p")) n = 1;

@@ -17,7 +17,8 @@ typedef union SDL_Event SDL_Event;
 enum {
     BIND_A, BIND_B, BIND_X, BIND_Y, BIND_LSTICK, BIND_RSTICK, BIND_L, BIND_R, BIND_ZL, BIND_ZR, BIND_PLUS, BIND_MINUS,
     BIND_LEFT, BIND_UP, BIND_RIGHT, BIND_DOWN,
-    BIND_PAD_COUNT,                                      // controller: the 16 buttons (its sticks stay the sticks)
+    BIND_SHAKE,                                          // a shake of the controller (motion: input.c) - no button bit
+    BIND_PAD_COUNT,                                      // controller: the 16 buttons + shake (its sticks stay the sticks)
     BIND_LS_UP = BIND_PAD_COUNT, BIND_LS_DOWN, BIND_LS_LEFT, BIND_LS_RIGHT,
     BIND_RS_UP, BIND_RS_DOWN, BIND_RS_LEFT, BIND_RS_RIGHT,
     BIND_KEY_COUNT                                       // keyboard: buttons + both sticks

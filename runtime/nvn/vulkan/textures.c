@@ -341,6 +341,25 @@ static void create_image(NvnTexture *t, TexBackend *b) {
         LOG("[img] %p: nvn %p fmt %#x target %u %ux%ux%u (guest %ux%ux%u) layers %u levels %u samples %u flags %#x usage %#x vk fmt %d -> %d nvn flags %#x%s\n",
             (void *)b->image, (void *)t, t->format, t->target, tw, th, depth, t->width, t->height, t->depth, layers, levels, samples,
             (unsigned)flags, (unsigned)usage, (int)vf, (int)r, t->flags, b->scalable ? " scalable" : "");
+    if (r == VK_ERROR_OUT_OF_DEVICE_MEMORY || r == VK_ERROR_OUT_OF_HOST_MEMORY) {
+        // out of graphics memory: any memory type the driver has room in (integrated GPUs: the PC's memory)...
+        VmaAllocationCreateInfo any = {.usage = VMA_MEMORY_USAGE_AUTO};
+        LOG("[vk] out of graphics memory for a %ux%u image (%d): trying any memory\n", tw, th, r);
+        r = vmaCreateImage(g_vk.vma, &ci, &any, &b->image, &b->mem, NULL);
+        // ... else the Internal resolution one step lower for the next start, and the player told so (not a bare
+        // "vmaCreateImage failed: -2", GitHub #9)
+        if (r != VK_SUCCESS) {
+            extern void settings_save(void);
+            int m = g_settings.res_mode, low = m == RES_5K ? 2 : m == 2 ? RES_1440 : m == RES_1440 ? 1 : m >= 3 && m <= 4 ? m - 1 : 1;
+            const char *names[] = {"", "1080p", "4K", "6K", "8K"};
+            const char *name = low == RES_1440 ? "1440p" : low >= 1 && low <= 4 ? names[low] : "1080p";
+            if (m != low) { g_settings.res_mode = low; g_settings.res_chosen = true; settings_save(); }
+            FATAL("Out of graphics memory (a %ux%u image).%s Close other programs that use the GPU and start the game again.\n", tw, th,
+                  m != low ? (low == 1 ? " Internal resolution was lowered to 1080p." : low == RES_1440 ? " Internal resolution was lowered to 1440p." :
+                              low == 2 ? " Internal resolution was lowered to 4K." : " Internal resolution was lowered.") : "");
+            (void)name;
+        }
+    }
     if (r != VK_SUCCESS) {
         LOG("[vk] image creation failed (%d): nvn fmt %#x %ux%ux%u target %u\n", r, t->format, t->width, t->height, t->depth, t->target);
         ci.format = vf = VK_FORMAT_R8G8B8A8_UNORM;

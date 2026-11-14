@@ -28,6 +28,7 @@ extern const char *const g_language_names[N_LANGUAGES];  // for the menu ("Auto"
 typedef struct {
     bool fullscreen;     // not a window: Borderless or Fullscreen (Video tab "Display mode"; F11 / Alt+Enter toggle it)
     bool borderless;     // ... Borderless: the desktop's own mode, no display mode change (device.c rt_set_fullscreen)
+    bool res_chosen;     // (the ini has a resolution: chosen, not the default - device.c lowers the default on iGPUs)
     int res_mode;        // 1..4 (N x 1080p: 1080p, 4K, 6K, 8K), RES_720 / 900 / 1440 / 5K; (older: RES_MATCH, RES_DYNAMIC, RES_Q*)
     int upscaler;        // UPSCALE_*: how a lower internal resolution reaches the window (MetalFX: macOS, FSR 1: Windows)
     int antialias;       // AA_*: anti-aliasing of the game image before it is scaled to the window

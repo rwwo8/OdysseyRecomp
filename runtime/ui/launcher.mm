@@ -33,6 +33,7 @@ extern "C" {
 #include "../paths.h"
 #include "../rt.h"
 #include "../settings.h"
+#include "../update.h"
 #ifdef __APPLE__
 void *ui_metal_layer(void);
 void *ui_metal_device(void);
@@ -63,7 +64,7 @@ static const ImU32 kPlay = RGB(229, 56, 59), kPlayHot = RGB(244, 76, 79);
 static const ImU32 kSoft = RGB(156, 195, 211), kFaint = RGB(104, 144, 160);
 
 // ------------------------------------------------------------------ state
-enum { ACT_NONE, ACT_PLAY, ACT_FOLDER, ACT_QUIT, ACT_CHANGE, ACT_REBUILD };
+enum { ACT_NONE, ACT_PLAY, ACT_FOLDER, ACT_QUIT, ACT_CHANGE, ACT_REBUILD, ACT_UPDATE, ACT_UPDATE_RESTART };
 #define PANEL_GAME (-10)  // g_panel: the Game page (game_panel_draw), not the menu's pages
 static std::atomic<int> g_action{ACT_NONE};  // (render -> main thread)
 static char g_root[1100] = "extracted";
@@ -374,6 +375,28 @@ void launcher_draw(float scale, void *font_v, void *font_big_v) {
         dl->AddText(f, small, ImVec2(x, 34 * s), kSoft, what);
     }
 
+    // a newer release (runtime/update.c): offered at the top, taken in place
+    {
+        int us = update_state();
+        char lbl[160] = "";
+        bool button = false;
+        if (us == UPDATE_AVAILABLE) snprintf(lbl, sizeof lbl, "Update %s is out - install it", update_latest()), button = true;
+        else if (us == UPDATE_DOWNLOADING) snprintf(lbl, sizeof lbl, update_progress() < 0.5f ? "Downloading update %s... %d MB" : "Unpacking update %s...", update_latest(), update_downloaded_mb());
+        else if (us == UPDATE_READY) snprintf(lbl, sizeof lbl, "Update %s ready - restart now", update_latest()), button = true;
+        else if (us == UPDATE_FAILED) snprintf(lbl, sizeof lbl, "Update failed: %s - try again", update_error()), button = true;
+        if (lbl[0]) {
+            ImVec2 ts = f->CalcTextSizeA(small, FLT_MAX, 0, lbl);
+            ImVec2 bp(D.x * 0.5f - ts.x * 0.5f - 16 * s, 26 * s), bz(ts.x + 32 * s, ts.y + 16 * s);
+            ImGui::SetCursorScreenPos(bp);
+            bool clicked = button && ImGui::InvisibleButton("##update", bz, ImGuiButtonFlags_EnableNav);
+            if (!button) ImGui::Dummy(bz);
+            bool hot = button && (ImGui::IsItemHovered() || (ImGui::IsItemFocused() && ImGui::GetCurrentContext()->NavCursorVisible));
+            dl->AddRectFilled(bp, ImVec2(bp.x + bz.x, bp.y + bz.y), button ? (hot ? kPlayHot : kPlay) : kTile, 10 * s);
+            dl->AddText(f, small, ImVec2(bp.x + 16 * s, bp.y + 8 * s), IM_COL32(255, 255, 255, 255), lbl);
+            if (clicked) g_action = us == UPDATE_READY ? ACT_UPDATE_RESTART : ACT_UPDATE;
+        }
+    }
+
     // the logo (or the name), centred over the tiles
     float row_w = fminf(D.x - 2 * m, 1560 * s), gap = 24 * s, th = fminf(D.y * 0.25f, 290 * s);
     float ty = D.y * 0.555f;
@@ -506,6 +529,7 @@ int launcher_run(const char *root) {
     static const char *shot = getenv("ODYSSEY_LAUNCHER_SHOT");  // (test) <frame>: the page as build/launcher.png
     static const char *autoplay = getenv("ODYSSEY_LAUNCHER_PLAY");  // (test) <frame>: Play pressed then
     LOG("[launcher] open\n");
+    update_check_start();
     menu_launcher_mode(true);
     g_in_loop = true;
     // (test) the player's own keys and controller don't reach a scripted run's launcher (as the game: hle/input.c)
@@ -547,6 +571,9 @@ int launcher_run(const char *root) {
         }
 #endif
         if (act == ACT_FOLDER) open_data_folder();
+        if (act == ACT_UPDATE) update_install_start();
+        if (update_state() == UPDATE_READY && getenv("ODYSSEY_UPDATE_APPLY_TEST")) act = ACT_UPDATE_RESTART;  // (test)
+        if (act == ACT_UPDATE_RESTART) { settings_save(); update_apply_and_exit(); }
         if (act == ACT_QUIT) {
             LOG("[launcher] quit\n");
             settings_save();

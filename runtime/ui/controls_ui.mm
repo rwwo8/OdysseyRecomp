@@ -88,7 +88,7 @@ extern "C" void controls_bindings_draw(float scale) {
         static const int order[] = {BIND_A, BIND_B, BIND_X, BIND_Y, BIND_L, BIND_R, BIND_ZL, BIND_ZR, BIND_PLUS,
                                     BIND_MINUS, BIND_UP, BIND_DOWN, BIND_LEFT, BIND_RIGHT, BIND_LSTICK, BIND_RSTICK,
                                     BIND_LS_UP, BIND_LS_DOWN, BIND_LS_LEFT, BIND_LS_RIGHT, BIND_RS_UP, BIND_RS_DOWN,
-                                    BIND_RS_LEFT, BIND_RS_RIGHT};
+                                    BIND_RS_LEFT, BIND_RS_RIGHT, BIND_SHAKE};
         for (int slot : order) {
             ImGui::TableNextRow();
             ImGui::TableNextColumn();

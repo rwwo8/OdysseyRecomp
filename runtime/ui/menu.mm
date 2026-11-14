@@ -749,9 +749,9 @@ static void tab_about(void) {
         settings_save();
     {
         int s = g_settings.mouse_sens;
-        if (opt_int("Mouse sensitivity", &s, 25, 400, 25, 100, "%d%%",
+        if (opt_int("Mouse sensitivity", &s, 25, 1000, 25, 100, "%d%%",
                     "How fast the camera turns for a move of the mouse. 100%: a quick flick turns it at the game's "
-                    "top speed.")) {
+                    "top speed; above that the camera turns faster than a stick can.")) {
             g_settings.mouse_sens = s;
             settings_save();
         }

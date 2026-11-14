@@ -109,6 +109,13 @@ static void pick_device(void) {
     free(qp);
     if (g_vk.qfam == UINT32_MAX) FATAL("no graphics+present queue\n");
     LOG("[vk] using %s\n", g_vk.props.deviceName);
+    // An integrated GPU (Intel Iris Xe / UHD / Arc iGPUs, AMD Vega / Radeon iGPUs, handhelds) shares the PC's memory and
+    // has a fraction of a graphics card's speed: unless an Internal resolution was chosen, 1080p rather than 1440p
+    // (an Iris Xe ran out of graphics memory at a cutscene's start: GitHub #9).
+    if (g_vk.props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU && !g_settings.res_chosen && g_settings.res_mode != 1) {
+        g_settings.res_mode = 1;
+        LOG("[vk] integrated GPU: Internal resolution 1080p (not chosen in the settings)\n");
+    }
 }
 
 static bool g_fault_ext;
@@ -193,7 +200,17 @@ static void create_device(void) {
     // Pipeline binaries: a compiled shader library saved as data of our own, and created from that data in a later run
     // or in another process - no compile (exec.c lib_binary_*). ODYSSEY_NO_PBIN=1: off.
     VkPhysicalDevicePipelineBinaryFeaturesKHR pbf = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_BINARY_FEATURES_KHR};
-    if (g_vk.gpl && m5.maintenance5 && has_ext(ep, ne, VK_KHR_PIPELINE_BINARY_EXTENSION_NAME) && !getenv("ODYSSEY_NO_PBIN")) {
+    bool pbin_refused = false;  // (cache/pbin.off: this driver refused the binaries it made - exec.c lib_from_binary)
+    {
+        FILE *f = fopen("cache/pbin.off", "r");
+        unsigned v = 0, d = 0;
+        if (f) {
+            pbin_refused = fscanf(f, "%u %u", &v, &d) == 2 && v == g_vk.props.vendorID && d == g_vk.props.driverVersion;
+            fclose(f);
+            if (pbin_refused) LOG("[vk] pipeline binaries: this driver refused them before (cache/pbin.off)\n");
+        }
+    }
+    if (g_vk.gpl && m5.maintenance5 && has_ext(ep, ne, VK_KHR_PIPELINE_BINARY_EXTENSION_NAME) && !getenv("ODYSSEY_NO_PBIN") && !pbin_refused) {
         VkPhysicalDeviceFeatures2 f2 = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &pbf};
         vkGetPhysicalDeviceFeatures2(g_vk.phys, &f2);
         pbf.pNext = NULL;

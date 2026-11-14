@@ -939,6 +939,12 @@ const char *renderer_stats(void) {
                      atomic_exchange(&stat_bin_loads, 0), atomic_exchange(&stat_bin_saves, 0), atomic_exchange(&stat_bin_refused, 0),
                      atomic_exchange(&stat_bin_absent, 0), vk_libs_shared_take());
         }
+        {
+            n = strlen(stats_text);
+            extern uint32_t vk_prelink_take(uint32_t *hits);
+            uint32_t hits, made = vk_prelink_take(&hits);
+            snprintf(stats_text + n, sizeof stats_text - n, ", built ahead %u (%u used)", made, hits);
+        }
         // ODYSSEY_LOG_MEM=1: where that memory is (the guest's window, the process's heaps: malloc and drivers), build
         // queues, programs, command records. ODYSSEY_HEAP_HIST=<frame>: the heaps' blocks by size, once.
         static int log_mem = -1, hist_at = -2;
@@ -1766,6 +1772,8 @@ typedef struct {
 // the libraries until a draw needs them (PSTEP_LIBS: see compile_program)
 enum { PSTEP_TRANSLATE, PSTEP_TRANSLATING, PSTEP_COMPILE, PSTEP_COMPILING, PSTEP_LIBS, PSTEP_LIBSING, PSTEP_DONE };
 static void make_shader_libs(Prog *p, bool cached_only);
+static void pipes_prelink(Prog *p);
+static bool prec_has(const Prog *p);
 static void huge_link_test(Prog *p);
 static __thread bool t_build_here;  // (blocking builds) a step goes on with the next one itself
 
@@ -1830,6 +1838,9 @@ static void compile_program(void *arg) {
     // programs set up ahead in a stage load, half of them drawn, cost +5 GB. Translation, SPIR-V and modules are cheap.
     static int huge_ahead = -1;  // (ODYSSEY_HUGE_AHEAD=1, tests: built ahead anyway, to time its compile)
     if (huge_ahead < 0) huge_ahead = getenv("ODYSSEY_HUGE_AHEAD") != NULL;
+    // (0.2.4: one with pipelines remembered for it - drawn before, by this player or in the shipped run - is built now
+    // all the same, and its pipelines with it: pipes_prelink. Effects and other bulk set-ups at boot among them.)
+    if (g_vk.gpl && p->ahead && !p->huge && !atomic_load(&p->urgent) && prec_has(p)) atomic_store(&p->urgent, true);
     if (g_vk.gpl && p->ahead && (!atomic_load(&p->urgent) || (p->huge && !p->drawn && !huge_ahead))) {
         atomic_store(&p->step, PSTEP_LIBS);
         return;
@@ -1838,6 +1849,7 @@ static void compile_program(void *arg) {
     if (p->huge && huge_ahead) huge_link_test(p);
     atomic_store(&p->step, PSTEP_DONE);
     atomic_store(&p->state, 1);
+    pipes_prelink(p);
 }
 
 // The libraries of a program set up ahead, for its first draw (a job, or the draw itself while builds block)
@@ -1848,6 +1860,7 @@ static void build_libs(void *arg) {
     make_shader_libs(p, false);
     atomic_store(&p->step, PSTEP_DONE);
     atomic_store(&p->state, 1);  // (no libraries: whole pipelines, from its modules)
+    pipes_prelink(p);
 }
 
 // ... or right in the draw when the driver has them already (pipeline cache, its own shader cache: 1-3 ms, no compile)
@@ -1860,6 +1873,7 @@ static bool libs_from_cache(Prog *p) {
     bool ok = p->lib_pr[1] && p->lib_fs;
     if (ok) atomic_store(&p->state, 1);
     atomic_store(&p->step, ok ? PSTEP_DONE : PSTEP_LIBS);
+    if (ok) pipes_prelink(p);
     return ok;
 }
 
@@ -2778,12 +2792,21 @@ static VkPipeline lib_from_binary(const Prog *p, VkGraphicsPipelineCreateInfo *p
         if (bins[i]) pf_destroy_bin(g_vk.dev, bins[i], NULL);
         if (owned[i]) free(data[i].pData);
     }
-    if (lib) atomic_fetch_add(&stat_bin_loads, 1);
+    static _Atomic int loads_ever, refused;
+    if (lib) atomic_fetch_add(&stat_bin_loads, 1), atomic_store(&loads_ever, 1);
     else {
         atomic_fetch_add(&stat_bin_refused, 1);
         static int nlog;
         if (nlog++ < 5) LOG("[vk] pipeline binary %s not taken (%s)\n", path, ok ? "the driver refused it" : "unreadable / other driver");
         remove(path);  // (compiled and saved again)
+        // A driver that takes none of the binaries it made (AMD's for the Z1 Extreme: "pipeline library failed: -1" for
+        // every one, each then compiled again): binaries off for this driver from the next start on (device.c reads
+        // cache/pbin.off: the libraries go into the pipeline cache instead, as on GPUs without binaries).
+        if (ok && atomic_fetch_add(&refused, 1) + 1 == 16 && !atomic_load(&loads_ever)) {
+            FILE *f = fopen("cache/pbin.off", "w");
+            if (f) { fprintf(f, "%u %u\n", g_vk.props.vendorID, g_vk.props.driverVersion); fclose(f); }
+            LOG("[vk] this driver refuses its own pipeline binaries: off from the next start (cache/pbin.off)\n");
+        }
     }
     return lib;
 }
@@ -3015,8 +3038,23 @@ static void make_shader_libs(Prog *p, bool cached_only) {
 // The list: every 30 s when it changed, and at exit. ODYSSEY_PREPARE=0: off.
 typedef struct { uint64_t spv[2]; } PrepItem;
 
+static int prec_count(void);
 static void prepare_list_write(bool force) {
     static int last_n = -1;
+    // (no pipeline libraries - old AMD drivers: the pipelines remembered since this start are built whole, into the
+    // pipeline cache, before the next start - vk_prepare_main: a list with no programs in it asks for that)
+    static int whole_n = -1;
+    if (!g_vk.gpl && !g_vk.headless && game_is_odyssey()) {
+        int n = prec_count();
+        if (whole_n < 0) whole_n = n;
+        if (n > whole_n) {
+            static const PrepItem none[8];
+            FILE *f = fopen("cache/prepare.list", "wb");
+            if (f) { fwrite(none, sizeof none, 1, f); fclose(f); }
+            whole_n = n;
+        }
+        return;
+    }
     if (!g_vk.pbin || g_vk.headless || !game_is_odyssey() || !pbin_init()) return;
     PrepItem *items = NULL;
     int n = 0, cap = 0;
@@ -3047,8 +3085,10 @@ static void prepare_list_write(bool force) {
 // On a thread of its own: the list checks the disk for each program's binaries (a stat each, thousands of programs),
 // which on the presenting thread held a frame every 30 s - 24-28 ms instead of 17 in a steady walk (2026-11-06).
 static _Atomic bool prepare_list_running;
+void vk_pipes_save(void);
 static void *prepare_list_thread(void *a) {
     (void)a;
+    vk_pipes_save();
     prepare_list_write(false);
     atomic_store(&prepare_list_running, false);
     return NULL;
@@ -3071,6 +3111,7 @@ void vk_prepare_list_save(void) {  // (exit: device.c)
         nanosleep(&ts, NULL);
     }
     if (!getenv("ODYSSEY_PREPARE") || atoi(getenv("ODYSSEY_PREPARE"))) prepare_list_write(true);
+    vk_pipes_save();
 }
 
 // The preparation's process: OdysseyRecomp --prepare-shaders <list> (runtime/main.c). The game's GPU and device
@@ -3269,6 +3310,7 @@ static bool precompile_collect(const char *out, int nt) {
 // the archive translated once into cache/precompile.list, then compiled in rounds - a round's process exits with 2
 // once it holds pm_mem_limit (the next round goes on from cache/precompile.next), with 0 when the list is done, with 3
 // when there was nothing to precompile. Any other list: the programs the game left in it, in one go.
+static int prepare_whole_pipelines(int nt);
 int vk_prepare_main(const char *list) {
     extern void vk_headless_init(void);
     int nt = SDL_GetNumLogicalCPUCores() - 1;  // (the player waits for it: before the game starts)
@@ -3298,7 +3340,12 @@ int vk_prepare_main(const char *list) {
     atomic_store(&pm_next, pm_base);
     uint64_t t0 = plat_now_ns();
     vk_headless_init();
-    if (!g_vk.gpl) { LOG("[prep] no pipeline libraries on this GPU: nothing to do\n"); return 0; }
+    if (!g_vk.gpl) {  // (old AMD drivers): the remembered pipelines, whole, into the pipeline cache
+        LOG("[prep] no pipeline libraries on this GPU: the remembered pipelines built whole\n");
+        prepare_whole_pipelines(nt);
+        if (all) { remove("cache/precompile.next"); remove("cache/precompile.list"); }
+        return 0;
+    }
     // (no pipeline binaries: the libraries go into the game's pipeline cache instead - device.c vk_pcache_load_headless)
     bool bins = g_vk.pbin && pbin_init();
     extern void vk_pcache_load_headless(void);
@@ -3342,7 +3389,7 @@ static VkPipeline lib_lookup(void *tab_, uint64_t h, bool *found) {
     return *found ? tab[slot].lib : (VkPipeline)(uintptr_t)(slot + 1u);  // (not found: the free slot, + 1)
 }
 
-static VkPipeline vertex_input_lib(const PipeKey *k) {
+static VkPipeline vertex_input_lib_(const PipeKey *k) {
     uint64_t h = hash_words(0x5bd1e995ull, k->attr_fmt, offsetof(PipeKey, blend) - offsetof(PipeKey, attr_fmt));
     h = hmix(h, &k->topo_class, 1);
     if (!h) h = 1;
@@ -3378,7 +3425,7 @@ static VkPipeline vertex_input_lib(const PipeKey *k) {
     return lib;
 }
 
-static VkPipeline fragment_output_lib(const PipeKey *k) {
+static VkPipeline fragment_output_lib_(const PipeKey *k) {
     uint64_t h = hash_words(0x27d4eb2dull, k->color, offsetof(PipeKey, attr_fmt) - offsetof(PipeKey, color));
     h = hash_words(h, k->blend, sizeof k->blend);
     h = hmix(h, &k->blend_on, 2);  // (blend_on, a2c)
@@ -3416,6 +3463,21 @@ static VkPipeline fragment_output_lib(const PipeKey *k) {
     VkPipeline lib = create_lib(&pi, VK_GRAPHICS_PIPELINE_LIBRARY_FRAGMENT_OUTPUT_INTERFACE_BIT_EXT);
     if (lib) { fo_tab[slot].key = h; fo_tab[slot].lib = lib; }
     return lib;
+}
+
+// (the render thread's links and the pre-links' workers both make and look up the interface parts)
+static pthread_mutex_t iface_lock = PTHREAD_MUTEX_INITIALIZER;
+static VkPipeline vertex_input_lib(const PipeKey *k) {
+    pthread_mutex_lock(&iface_lock);
+    VkPipeline r = vertex_input_lib_(k);
+    pthread_mutex_unlock(&iface_lock);
+    return r;
+}
+static VkPipeline fragment_output_lib(const PipeKey *k) {
+    pthread_mutex_lock(&iface_lock);
+    VkPipeline r = fragment_output_lib_(k);
+    pthread_mutex_unlock(&iface_lock);
+    return r;
 }
 
 // Link time per frame (render thread). A place seen for the first time brings dozens of new pipelines in one frame,
@@ -3458,6 +3520,272 @@ static bool link_pipeline(Pipe *pp) {
     atomic_fetch_add(&stat_links, 1);
     atomic_store(&pp->state, 1);
     return true;
+}
+
+// ---- pipelines built ahead (0.2.4): every pipeline a draw made is remembered - its program by its SPIR-V (spv_key)
+// and the rest of its key - in cache/pipes.bin, and a list recorded in a run through every kingdom ships with the
+// program (known_pipes.bin: hashes and render state only, no game data). Once a program's shaders are ready (its
+// libraries, or its modules on a GPU without libraries), the pipelines remembered for it are linked / built on a worker
+// right away, before its first draw: a draw then finds its pipeline made (pre_tab) instead of linking it on the render
+// thread (the hitches entering a place, 80-450 links in two seconds even with every shader cached) or being left out
+// for frames while it waits (objects missing or flickering). ODYSSEY_PRELINK=0: off.
+typedef struct { uint64_t spv[2]; PipeKey k; } PipeRec;  // (k.prog NULL)
+#define PREC_TAB (1 << 17)
+static struct { uint64_t h; int next; } *prec_hash;  // (prec_lock) every record's hash, chained per bucket
+static int *prec_bucket;
+static PipeRec *precs;
+static int prec_n, prec_cap, prec_saved, prec_shipped;
+static pthread_mutex_t prec_lock = PTHREAD_MUTEX_INITIALIZER;
+static int prec_on = -1;
+static _Atomic uint32_t stat_prelinked, stat_prelink_hits;
+uint32_t vk_prelink_take(uint32_t *hits) { *hits = atomic_exchange(&stat_prelink_hits, 0); return atomic_exchange(&stat_prelinked, 0); }
+
+static uint64_t prec_key_hash(const PipeRec *r) { return hash_words(r->spv[0] * 31 + r->spv[1], &r->k, sizeof r->k) | 1; }
+static uint32_t prog_spv_bucket(uint64_t a, uint64_t b) { uint64_t h = (a ^ b * 0x9E3779B97F4A7C15ull) * 0xff51afd7ed558ccdull; return (uint32_t)(h >> 47) & (PREC_TAB - 1); }
+
+static bool prec_add(const PipeRec *r) {  // (prec_lock) false: had it
+    uint64_t h = prec_key_hash(r);
+    uint32_t b = prog_spv_bucket(r->spv[0], r->spv[1]);
+    for (int i = prec_bucket[b]; i >= 0; i = prec_hash[i].next) if (prec_hash[i].h == h) return false;
+    if (prec_n == prec_cap) {
+        prec_cap = prec_cap ? prec_cap * 2 : 4096;
+        precs = realloc(precs, sizeof *precs * (size_t)prec_cap);
+        prec_hash = realloc(prec_hash, sizeof *prec_hash * (size_t)prec_cap);
+    }
+    precs[prec_n] = *r;
+    prec_hash[prec_n].h = h;
+    prec_hash[prec_n].next = prec_bucket[b];
+    prec_bucket[b] = prec_n++;
+    return true;
+}
+
+static void prec_load_file(const char *path) {
+    FILE *f = path ? fopen(path, "rb") : NULL;
+    if (!f) return;
+    uint32_t magic = 0, size = 0;
+    if (fread(&magic, 4, 1, f) == 1 && fread(&size, 4, 1, f) == 1 && magic == 0x31455050 /* PPE1 */ && size == sizeof(PipeRec)) {
+        PipeRec r;
+        while (fread(&r, sizeof r, 1, f) == 1) { r.k.prog = NULL; prec_add(&r); }
+    }
+    fclose(f);
+}
+
+static bool prec_ready(void) {  // (prec_lock) loaded once
+    if (prec_on < 0) { const char *e = getenv("ODYSSEY_PRELINK"); prec_on = (!e || atoi(e)) && (game_is_odyssey() || g_vk.headless); }
+    if (!prec_on) return false;
+    if (prec_bucket) return true;
+    prec_bucket = malloc(sizeof *prec_bucket * PREC_TAB);
+    memset(prec_bucket, 0xff, sizeof *prec_bucket * PREC_TAB);
+    char path[1100];
+    if (rt_resource("known_pipes.bin", "runtime/nvn/vulkan/known_pipes.bin", path, sizeof path)) prec_load_file(path);
+    int shipped = prec_shipped = prec_n;
+    prec_load_file("cache/pipes.bin");
+    prec_saved = prec_n;
+    LOG("[vk] pipelines built ahead: %d shipped, %d more from earlier runs\n", shipped, prec_n - shipped);
+    return true;
+}
+
+// A draw made a new pipeline (render thread): remembered for the next runs.
+static void prec_record(const Prog *p, const PipeKey *k) {
+    if (!p->spv_key[0] || !p->spv_key[1] || p->huge) return;
+    PipeRec r;
+    memset(&r, 0, sizeof r);
+    r.spv[0] = p->spv_key[0];
+    r.spv[1] = p->spv_key[1];
+    r.k = *k;
+    r.k.prog = NULL;
+    pthread_mutex_lock(&prec_lock);
+    if (prec_ready()) prec_add(&r);
+    pthread_mutex_unlock(&prec_lock);
+}
+
+// cache/pipes.bin: the shipped ones are not written again (they load first; the file holds what came after them)
+void vk_pipes_save(void) {
+    pthread_mutex_lock(&prec_lock);
+    if (prec_bucket && prec_n > prec_saved) {
+        int shipped = prec_shipped;
+        mkdir("cache", 0755);
+        FILE *f = fopen("cache/pipes.bin.tmp", "wb");
+        uint32_t hdr[2] = {0x31455050, (uint32_t)sizeof(PipeRec)};
+        bool ok = f && fwrite(hdr, sizeof hdr, 1, f) == 1;
+        if (ok && prec_n > shipped) ok = fwrite(precs + shipped, sizeof *precs, (size_t)(prec_n - shipped), f) == (size_t)(prec_n - shipped);
+        if (f) ok = fclose(f) == 0 && ok;
+        if (ok) { remove("cache/pipes.bin"); ok = rename("cache/pipes.bin.tmp", "cache/pipes.bin") == 0; }
+        if (ok) prec_saved = prec_n;
+        else remove("cache/pipes.bin.tmp");
+    }
+    pthread_mutex_unlock(&prec_lock);
+}
+
+// The pipelines made ahead, by the draw's key hash (as pipe_tab): a worker claims a slot (key), then publishes the
+// pipeline; the render thread reads without a lock.
+#define PRE_TAB 65536
+static struct { _Atomic uint64_t key; _Atomic(VkPipeline) pipe; } pre_tab[PRE_TAB];
+static uint64_t pipe_key_hash(const PipeKey *k) {
+    uint64_t ph = hash_words(0xcbf29ce484222325ull, k, sizeof *k);
+    return ph ? ph : 1;
+}
+static VkPipeline pre_lookup(uint64_t ph) {
+    uint32_t s = (uint32_t)(ph ^ (ph >> 29)) & (PRE_TAB - 1);
+    for (int i = 0; i < 64; i++, s = (s + 1) & (PRE_TAB - 1)) {
+        uint64_t k = atomic_load_explicit(&pre_tab[s].key, memory_order_acquire);
+        if (!k) return VK_NULL_HANDLE;
+        if (k == ph) return atomic_load_explicit(&pre_tab[s].pipe, memory_order_acquire);
+    }
+    return VK_NULL_HANDLE;
+}
+static int pre_claim(uint64_t ph) {  // the slot this worker fills; -1: taken already (or no room)
+    uint32_t s = (uint32_t)(ph ^ (ph >> 29)) & (PRE_TAB - 1);
+    for (int i = 0; i < 64; i++, s = (s + 1) & (PRE_TAB - 1)) {
+        uint64_t k = atomic_load(&pre_tab[s].key);
+        if (k == ph) return -1;
+        if (!k) {
+            uint64_t z = 0;
+            if (atomic_compare_exchange_strong(&pre_tab[s].key, &z, ph)) return (int)s;
+            if (z == ph) return -1;
+        }
+    }
+    return -1;
+}
+
+static void build_pipeline(void *arg);
+// The program's remembered pipelines, made on this worker.
+static void prelink_job(void *arg) {
+    Prog *p = arg;
+    PipeKey *keys = NULL;
+    int n = 0;
+    pthread_mutex_lock(&prec_lock);
+    if (prec_ready()) {
+        uint32_t b = prog_spv_bucket(p->spv_key[0], p->spv_key[1]);
+        for (int i = prec_bucket[b]; i >= 0; i = prec_hash[i].next) {
+            if (precs[i].spv[0] != p->spv_key[0] || precs[i].spv[1] != p->spv_key[1]) continue;
+            if (!(n & 63)) keys = realloc(keys, sizeof *keys * (size_t)(n + 64));
+            keys[n++] = precs[i].k;
+        }
+    }
+    pthread_mutex_unlock(&prec_lock);
+    for (int i = 0; i < n; i++) {
+        PipeKey *k = &keys[i];
+        k->prog = p;
+        if (k->poly_fill > 3) continue;
+        uint64_t ph = pipe_key_hash(k);
+        int slot = pre_claim(ph);
+        if (slot < 0) continue;
+        VkPipeline pipe = VK_NULL_HANDLE;
+        if (g_vk.gpl && !p->no_gpl && p->lib_fs) {
+            if (!p->lib_pr[k->poly_fill]) continue;  // (line mode: made when first drawn)
+            VkPipeline libs[4] = {vertex_input_lib(k), p->lib_pr[k->poly_fill], p->lib_fs, fragment_output_lib(k)};
+            if (!libs[0] || !libs[3]) continue;
+            VkPipelineLibraryCreateInfoKHR lci = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LIBRARY_CREATE_INFO_KHR, .libraryCount = 4, .pLibraries = libs};
+            VkGraphicsPipelineCreateInfo pi = {.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, .pNext = &lci, .layout = p->layout};
+            if (vkCreateGraphicsPipelines(g_vk.dev, VK_NULL_HANDLE, 1, &pi, NULL, &pipe) != VK_SUCCESS) pipe = VK_NULL_HANDLE;
+        } else if (p->vs && p->fs && p->layout) {
+            Pipe tmp;
+            memset(&tmp, 0, sizeof tmp);
+            tmp.k = *k;
+            build_pipeline(&tmp);
+            if (atomic_load(&tmp.state) == 1) pipe = tmp.pipe;
+        }
+        if (pipe) {
+            atomic_store_explicit(&pre_tab[slot].pipe, pipe, memory_order_release);
+            atomic_fetch_add(&stat_prelinked, 1);
+        }
+    }
+    free(keys);
+}
+
+static int prec_count(void) {
+    pthread_mutex_lock(&prec_lock);
+    int n = prec_ready() ? prec_n : 0;
+    pthread_mutex_unlock(&prec_lock);
+    return n;
+}
+
+// The preparation's process on a GPU without pipeline libraries (old AMD drivers: RX 580 / 570 / 550, Vega iGPUs):
+// every remembered pipeline (shipped and this player's) built whole once into the pipeline cache, from the SPIR-V
+// the precompile and earlier runs left in the disk cache - the game's own build of it then is the driver's cache hit
+// (a few ms) instead of a compile in play. Those whose SPIR-V isn't there yet wait for a later start.
+static PipeRec *pw_recs;
+static int pw_n;
+static _Atomic int pw_next, pw_done, pw_built;
+static void *pw_worker(void *a) {
+    (void)a;
+    for (int i; (i = atomic_fetch_add(&pw_next, 1)) < pw_n; atomic_fetch_add(&pw_done, 1)) {
+        const PipeRec *r = &pw_recs[i];
+        size_t nv = 0, nf = 0;
+        uint32_t *sv = vk_spirv_by_key(r->spv[0], &nv);
+        uint32_t *sf = sv ? vk_spirv_by_key(r->spv[1], &nf) : NULL;
+        if (sf) {
+            Prog *p = calloc(1, sizeof *p);
+            p->nbinds = vk_reflect(sv, nv, p->binds, MAX_BIND);
+            p->nbinds += vk_reflect(sf, nf, p->binds + p->nbinds, MAX_BIND - p->nbinds);
+            p->vs = vk_module(sv, nv);
+            p->fs = vk_module(sf, nf);
+            if (p->vs && p->fs) {
+                p->layout = make_layout(p, 2, VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT);
+                Pipe tmp;
+                memset(&tmp, 0, sizeof tmp);
+                tmp.k = r->k;
+                tmp.k.prog = p;
+                if (tmp.k.poly_fill <= 3) build_pipeline(&tmp);
+                if (atomic_load(&tmp.state) == 1) { vkDestroyPipeline(g_vk.dev, tmp.pipe, NULL); atomic_fetch_add(&pw_built, 1); }
+                vkDestroyPipelineLayout(g_vk.dev, p->layout, NULL);
+                for (int k = 0; k < 2; k++) if (p->set_layout[k]) vkDestroyDescriptorSetLayout(g_vk.dev, p->set_layout[k], NULL);
+            }
+            if (p->vs) vkDestroyShaderModule(g_vk.dev, p->vs, NULL);
+            if (p->fs) vkDestroyShaderModule(g_vk.dev, p->fs, NULL);
+            free(p);
+        }
+        free(sv);
+        free(sf);
+    }
+    return NULL;
+}
+static int prepare_whole_pipelines(int nt) {
+    extern void vk_pcache_load_headless(void);
+    extern void vk_pipeline_cache_save(void);
+    uint64_t t0 = plat_now_ns();
+    pthread_mutex_lock(&prec_lock);
+    if (prec_ready() && prec_n) {
+        pw_recs = malloc(sizeof *pw_recs * (size_t)prec_n);
+        memcpy(pw_recs, precs, sizeof *pw_recs * (size_t)prec_n);
+        pw_n = prec_n;
+    }
+    pthread_mutex_unlock(&prec_lock);
+    if (!pw_n) { LOG("[prep] no remembered pipelines yet\n"); return 0; }
+    vk_pcache_load_headless();
+    pthread_t th[16];
+    for (int i = 0; i < nt; i++) pthread_create(&th[i], NULL, pw_worker, NULL);
+    for (int last = -1, d; (d = atomic_load(&pw_done)) < pw_n; SDL_Delay(100)) {
+        FILE *f;
+        if (d != last && (f = fopen("cache/prepare.progress", "w"))) { fprintf(f, "%d %d 1\n", d, pw_n); fclose(f); last = d; }
+    }
+    for (int i = 0; i < nt; i++) pthread_join(th[i], NULL);
+    vk_pipeline_cache_save();
+    LOG("[prep] %d of %d remembered pipelines built whole on %d threads in %.1f s\n", atomic_load(&pw_built), pw_n, nt,
+        (plat_now_ns() - t0) / 1e9);
+    free(pw_recs);
+    return 0;
+}
+
+// Pipelines are remembered for this program?
+static bool prec_has(const Prog *p) {
+    if (!p || p->huge || !p->spv_key[0] || !p->spv_key[1] || g_vk.headless) return false;
+    pthread_mutex_lock(&prec_lock);
+    bool any = false;
+    if (prec_ready()) {
+        uint32_t b = prog_spv_bucket(p->spv_key[0], p->spv_key[1]);
+        for (int i = prec_bucket[b]; i >= 0 && !any; i = prec_hash[i].next)
+            any = precs[i].spv[0] == p->spv_key[0] && precs[i].spv[1] == p->spv_key[1];
+    }
+    pthread_mutex_unlock(&prec_lock);
+    return any;
+}
+
+// The program's shaders are ready (its libraries, or its modules without libraries): its remembered pipelines next.
+static void pipes_prelink(Prog *p) {
+    bool any = prec_has(p);
+    if (any) queue_job(prelink_job, p, g_vk.gpl && !p->no_gpl ? 0 : 1);  // (whole pipelines: slow - the low queue)
 }
 
 // (ODYSSEY_HUGE_AHEAD=1, tests) what a draw of a huge program costs: a link with one RGBA8 target, as a draw would
@@ -4740,13 +5068,18 @@ static void draw_(CmdRec *r, bool indexed) {
         if (logp < 0) logp = getenv("ODYSSEY_LOG_PROGS") != NULL;
         if (logp) LOG("[prog] pipe vs=%llx fs=%llx frame %llu ready %d\n", (unsigned long long)pr->code[0],
                       (unsigned long long)pr->code[1], (unsigned long long)renderer_present_count(), atomic_load(&pr->state));
-        if (g_vk.gpl && g_draw_relaxed && !pr->no_gpl && pr->lib_fs && !link_budget_ok()) pp->link_later = true;
+        prec_record(pr, &k);
+        VkPipeline pre = pre_lookup(ph);
+        if (pre) { pp->pipe = pre; atomic_store(&pp->state, 1); atomic_fetch_add(&stat_prelink_hits, 1); }
+        else if (g_vk.gpl && g_draw_relaxed && !pr->no_gpl && pr->lib_fs && !link_budget_ok()) pp->link_later = true;
         else if (g_vk.gpl && link_pipeline(pp)) {}
         else if (pr->huge) queue_job(build_pipeline, pp, 0);
         else run_job(build_pipeline, pp);
-    } else if (pp->link_later && (!g_draw_relaxed || link_budget_ok())) {
+    } else if (pp->link_later && (pre_lookup(ph) || !g_draw_relaxed || link_budget_ok())) {
         pp->link_later = false;
-        if (link_pipeline(pp)) {}
+        VkPipeline pre = pre_lookup(ph);
+        if (pre) { pp->pipe = pre; atomic_store(&pp->state, 1); atomic_fetch_add(&stat_prelink_hits, 1); }
+        else if (link_pipeline(pp)) {}
         else if (pr->huge) queue_job(build_pipeline, pp, 0);
         else run_job(build_pipeline, pp);
     }

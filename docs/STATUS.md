@@ -1,4 +1,4 @@
-# Status (update 46, 2026-11-10)
+# Status (update 52, 2026-11-14)
 
 Current state only. The investigations behind each item are in `docs/notes/`.
 
@@ -33,10 +33,19 @@ through on it at 60 fps.
 - The Wooded Kingdom's poison goo hurts only where it is drawn (update 49): the game reads GPU-drawn textures on the
   CPU, and they now reach its memory (`notes/invisible-poison-2026-11-13.md`). The boss fight itself not played by hand.
 
+- Pipelines are built ahead of their first draw from this player's and a shipped list (update 52): in a run through
+  every kingdom from an empty cache, links in play fell from 13,139 to 2,696 and draws left out from 3,160 to 1,841
+  (`notes/pipelines-ahead-2026-11-14.md`). GPUs without pipeline libraries get them built whole before the start.
+- Lights have round halos at high internal resolutions, no grid of dots (update 52, `notes/bloom-grid-2026-11-14.md`).
+- Gyro, a Shake binding, two players (second controller), mouse camera past the stick's speed, in-app updates
+  (Windows, tested: download, install, restart) - update 52. Gyro and two players not tried with real controllers.
+
 ## Known problems
 
 | Problem | State |
 | --- | --- |
 | A stage or effect seen for the first time can hold the picture for a moment (shader builds) | Upstream known issue; cached afterwards |
 | Only game version 1.0.0 | By design |
+| The first frames of a new scene (entering a kingdom, after a fall) take 150-350 ms: GPU work, not shaders | Open |
+| Linux build: needs a Linux environment (WSL2 / podman) | Open |
 | Not re-checked on the new base: puddle colours, the flicker by Mario's eye on the title | Open |

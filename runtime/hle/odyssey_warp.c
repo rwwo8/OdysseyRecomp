@@ -188,6 +188,8 @@ static void stage_scene_control(Cpu *c) {
 }
 
 void odyssey_boot(void) {
+    extern void input_camera_hooks(void);  // (hle/input.c: the mouse past the camera stick's full tilt)
+    input_camera_hooks();
     const char *e = getenv("ODYSSEY_WARP");
     g_log = (e && *e) || getenv("ODYSSEY_LOG_STAGES");
     g_complete_at = getenv("ODYSSEY_SAVE_COMPLETE") ? strtoull(getenv("ODYSSEY_SAVE_COMPLETE"), NULL, 10) + 1 : 0;
