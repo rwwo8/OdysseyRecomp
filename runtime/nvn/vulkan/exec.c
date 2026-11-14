@@ -350,8 +350,8 @@ void vc_flush(void);
 bool g_gpuprof_frame;
 static VkQueryPool gp_qp;
 static int gp_n;
-static char gp_label[512][112];
-static uint32_t gp_draws[512];
+static char gp_label[4096][112];
+static uint32_t gp_draws[4096];
 // ODYSSEY_VK_DEVLOST_TRACE=1: the last 64 GPU operations, dumped on device loss (with ODYSSEY_SYNC_SUBMIT=1 the
 // dump ends with the command list that faulted).
 static char dl_ring[64][128];
@@ -416,12 +416,12 @@ void vk_devlost_dump(void) {
     for (unsigned i = dl_n > 64 ? dl_n - 64 : 0; i < dl_n; i++) LOG("[vk]   %s\n", dl_ring[i & 63]);
 }
 static void gp_mark(VkCommandBuffer cb, const char *fmt, ...) {
-    if (!g_gpuprof_frame || gp_n >= 511) return;
+    if (!g_gpuprof_frame || gp_n >= 4095) return;
     if (!gp_qp) {
-        VkQueryPoolCreateInfo qi = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, .queryType = VK_QUERY_TYPE_TIMESTAMP, .queryCount = 512};
+        VkQueryPoolCreateInfo qi = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, .queryType = VK_QUERY_TYPE_TIMESTAMP, .queryCount = 4096};
         if (vkCreateQueryPool(g_vk.dev, &qi, NULL, &gp_qp) != VK_SUCCESS) { g_gpuprof_frame = false; return; }
     }
-    if (!gp_n) vkCmdResetQueryPool(cb, gp_qp, 0, 512);
+    if (!gp_n) vkCmdResetQueryPool(cb, gp_qp, 0, 4096);
     vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, gp_qp, (uint32_t)gp_n);
     va_list ap;
     va_start(ap, fmt);
@@ -434,7 +434,7 @@ void renderer_flush(void);
 void vk_gpuprof_report(void) {
     if (!gp_n) return;
     renderer_flush();
-    uint64_t t[512];
+    static uint64_t t[4096];
     if (vkGetQueryPoolResults(g_vk.dev, gp_qp, 0, (uint32_t)gp_n, sizeof t, t, 8, VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) == VK_SUCCESS) {
         double per = g_vk.props.limits.timestampPeriod / 1e6, total = (t[gp_n - 1] - t[0]) * per;
         LOG("[gpuprof] %d marks, %.2f ms first to last (rows: the work after each mark, until the next)\n", gp_n, total);
@@ -450,8 +450,10 @@ void vk_gpuprof_report(void) {
 // Submit the pending work (if any). wait/signal: binary semaphores for presentation (may be null).
 void vk_submit_extra(VkSemaphore wait, VkSemaphore signal, VkCommandBuffer extra) {
     (void)extra;
+    uint64_t q0 = plat_now_ns();
     vk_end_pass();
     Sub *s = sub();
+    uint64_t q1 = plat_now_ns();
     if (!s->main_begun && !s->upload_begun && !wait && !signal) return;
     VkCommandBufferSubmitInfo cbs[2];
     int n = 0;
@@ -462,10 +464,12 @@ void vk_submit_extra(VkSemaphore wait, VkSemaphore signal, VkCommandBuffer extra
         cbs[n++] = (VkCommandBufferSubmitInfo){.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, .commandBuffer = s->upload};
     }
     vk_cmd();  // (an empty main buffer still carries the semaphores)
+    uint64_t q2 = plat_now_ns();
     {   // linear render targets this submission drew into: their texels back to guest memory (textures.c)
         extern void vk_lrt_writeback(VkCommandBuffer cb);
         vk_lrt_writeback(s->main);
     }
+    uint64_t q3 = plat_now_ns();
     if (s->ts) vkCmdWriteTimestamp2(s->main, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, prof_qp, (uint32_t)cur_sub * 2 + 1);
     VK_CHECK(vkEndCommandBuffer(s->main));
     cbs[n++] = (VkCommandBufferSubmitInfo){.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO, .commandBuffer = s->main};
@@ -491,11 +495,16 @@ void vk_submit_extra(VkSemaphore wait, VkSemaphore signal, VkCommandBuffer extra
     pthread_mutex_lock(&seq_lock);
     submit_seq++;
     pthread_mutex_unlock(&seq_lock);
+    uint64_t q4 = plat_now_ns();
     cur_sub = (cur_sub + 1) % SUBS;
     stat_flushes++;
     cum_submits++;
     ring_retire();
     vk_collect_dead();
+    uint64_t q5 = plat_now_ns();
+    if (prof && q5 - q0 > 30000000ull)  // (ODYSSEY_VK_PROF: a slow submission, by its parts)
+        LOG("[submit] %.0f ms: slot %.1f, vertex cache / uploads %.1f, linear targets %.1f, end + submit %.1f, retire %.1f\n",
+            (q5 - q0) / 1e6, (q1 - q0) / 1e6, (q2 - q1) / 1e6, (q3 - q2) / 1e6, (q4 - q3) / 1e6, (q5 - q4) / 1e6);
 }
 
 void renderer_submit(void) {

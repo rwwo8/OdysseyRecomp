@@ -103,9 +103,12 @@ static void log_to_file_without_terminal(void) {
 #if defined(__x86_64__)
 // The recompiled game code is built for x86-64-v3 (Makefile GENARCH: AVX2, FMA, BMI2): say so instead of crashing
 // with an illegal instruction on an older CPU.
-static void require_cpu(void) {
-    __builtin_cpu_init();
-    if (__builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma") && __builtin_cpu_supports("bmi2")) return;
+#include <cpuid.h>
+static void require_cpu(void) {  // (cpuid directly: the release is linked with zig, whose runtime has no __cpu_model)
+    unsigned a, b, c, d;
+    bool fma = __get_cpuid(1, &a, &b, &c, &d) && (c & bit_FMA) && (c & bit_OSXSAVE);
+    bool avx2 = __get_cpuid_count(7, 0, &a, &b, &c, &d) && (b & bit_AVX2) && (b & bit_BMI2);
+    if (fma && avx2) return;
     fprintf(stderr, "FATAL: Odyssey Recomp needs a CPU with AVX2 (Intel Haswell / 2013 or newer, AMD Excavator / Zen or "
                     "newer).\n");
     exit(1);

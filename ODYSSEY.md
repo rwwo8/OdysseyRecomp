@@ -315,3 +315,10 @@ make -j16       # يبني build/OdysseyRecomp.exe و build/odyssey_game.dll
 باقي: أول فريمات المشهد الجديد (الكرت نفسه ياخذ وقت)، الفيديوهات، ونسخة لينكس (تحتاج WSL).
 
 النسخة صارت 0.2.4.
+
+### تحديث 53: نسخة لينكس (مع 0.2.4)
+
+| التغيير | الملف |
+|---|---|
+| نسخة لينكس (x64، Steam Deck) مبنية على ويندوز بدون جهاز لينكس: zig يترجم لـ glibc 2.35، وملفات Ubuntu 22.04 الرسمية للهيدرات، و SDL3 و FFmpeg (LGPL) و shaderc مبنية من مصادرها، و Python جاهز (python-build-standalone) لمولد الكود، و zig لينكس للتجهيز. ملف `tar.gz` تفكه وتشغل `OdysseyRecomp.sh`. **ما انجربت على لينكس** (ما عندنا جهاز)، فحصنا الملف بس: المكتبات اللي يطلبها، و rpath، وأعلى glibc 2.35 | `tools/linux/cross_build.sh`, `cross_sysroot.py`, `cross_package.py` |
+| بداية المشهد: السبب طلع shader ضوضاء خلوية ثلاثية الأبعاد ينرسم 64 مرة (119 ms من 153 على الكرت) | `docs/notes/scene-start-2026-11-14.md` |

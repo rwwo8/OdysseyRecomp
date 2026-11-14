@@ -23,6 +23,8 @@
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 #endif
+#include <sys/stat.h>
+
 #include "launcher.h"
 #include "menu.h"
 
@@ -274,12 +276,9 @@ static void game_panel_draw(ImFont *f, ImFont *fb, float s) {
         at = now;
         char p[1200];
         snprintf(p, sizeof p, "%s/romfs.bin", g_root);
-        FILE *fi = fopen(p, "rb");
-        if (fi) {
-            _fseeki64(fi, 0, SEEK_END);
-            snprintf(rom, sizeof rom, "Super Mario Odyssey 1.0.0 - game data %.1f GB", _ftelli64(fi) / 1e9);
-            fclose(fi);
-        } else snprintf(rom, sizeof rom, "Super Mario Odyssey 1.0.0 - game data from its folder (romfs)");
+        struct stat rst;
+        if (stat(p, &rst) == 0) snprintf(rom, sizeof rom, "Super Mario Odyssey 1.0.0 - game data %.1f GB", (double)rst.st_size / 1e9);
+        else snprintf(rom, sizeof rom, "Super Mario Odyssey 1.0.0 - game data from its folder (romfs)");
         snprintf(code, sizeof code, "%s", gamelib_present(g_root) ? "Game code built for this version" : "Game code not built for this version");
         snprintf(where, sizeof where, "%s/%s", rt_data_root(), g_root);
     }

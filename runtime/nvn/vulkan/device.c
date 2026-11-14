@@ -1343,8 +1343,10 @@ static void backend_present_locked(NvnTexture *t, bool handed) {
     if (menu_at < 0) menu_at = getenv("ODYSSEY_MENU_AT") ? atol(getenv("ODYSSEY_MENU_AT")) : 0;
     if (menu_at && (long)total_frames + 1 == menu_at) { extern void menu_test_open(void); menu_test_open(); }
     bool have = false;
+    uint64_t pt0 = SDL_GetTicksNS(), pt1 = pt0, pt2 = pt0, pt3 = pt0;  // (ODYSSEY_VK_PROF: where a slow present's time went)
     if (!fd.game_w && !fd.skip && fd.placed) {
         have = vk_frame_begin(black);
+        pt1 = SDL_GetTicksNS();
         uint64_t nd = SDL_GetTicksNS() - t0;
         if (nd > 30000000) {
             static int warned;
@@ -1359,6 +1361,7 @@ static void backend_present_locked(NvnTexture *t, bool handed) {
         vk_queue_lock();  // (ImGui's first frame uploads its fonts through the queue)
         menu_render((void *)cb, g_vk.sc_extent.width, g_vk.sc_extent.height);
         vk_queue_unlock();
+        pt2 = SDL_GetTicksNS();
         static long win_shot = -1;
         if (win_shot < 0) win_shot = getenv("ODYSSEY_WINDOW_SHOT") ? atol(getenv("ODYSSEY_WINDOW_SHOT")) : 0;
         bool shot = win_shot && (long)total_frames + 1 == win_shot;
@@ -1367,8 +1370,13 @@ static void backend_present_locked(NvnTexture *t, bool handed) {
         if (getenv("ODYSSEY_LOG_PRESENTS")) LOG("[present] %.3f game image (direct)\n", plat_now_ns() / 1e6);
         if (shot && getenv("ODYSSEY_EXIT_AFTER_SHOT")) { fflush(stderr); _exit(0); }
     } else if (!handed) {
+        pt1 = pt2 = SDL_GetTicksNS();
         renderer_submit();
     }
+    pt3 = SDL_GetTicksNS();
+    if (pt3 - t0 > 50000000ull && getenv("ODYSSEY_VK_PROF"))
+        LOG("[present] %.0f ms: before %.1f, frame begin (GPU wait, acquire) %.1f, draw %.1f, end / submit %.1f%s\n", (pt3 - t0) / 1e6,
+            (pt0 - t0) / 1e6, (pt1 - pt0) / 1e6, (pt2 - pt1) / 1e6, (pt3 - pt2) / 1e6, have ? "" : " (no window image: submit only)");
     extern void vk_prof_frame(uint64_t frame, uint64_t present_ns);
     vk_prof_frame(total_frames, SDL_GetTicksNS() - t0);
     frames++;

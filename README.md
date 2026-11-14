@@ -25,7 +25,8 @@ code, no assets, no fonts.
 ## Download
 
 **[Download the latest release](https://github.com/rwwo8/OdysseyRecomp/releases/latest)** - Windows (x64):
-`Odyssey Recomp-<version>-windows.zip`. It's also in [RecompLauncher](https://recomplauncher.com/game/odysseyrecomp),
+`Odyssey Recomp-<version>-windows.zip`; Linux (x64, Steam Deck): `Odyssey Recomp-<version>-linux-x86_64.tar.gz` (extract it,
+start `OdysseyRecomp.sh`; glibc 2.35+, Vulkan, X11 / XWayland). From 0.2.4 on the launcher installs new versions itself. It's also in [RecompLauncher](https://recomplauncher.com/game/odysseyrecomp),
 which installs it, sets it up from your game folder and keeps it updated (Easy Setup, `recomplauncher.json`).
 
 1. Extract the zip into a folder you can write to (Documents or Desktop, not Program Files) and start
