@@ -352,14 +352,18 @@ static void create_image(NvnTexture *t, TexBackend *b) {
         // "vmaCreateImage failed: -2", GitHub #9)
         if (r != VK_SUCCESS) {
             extern void settings_save(void);
-            int m = g_settings.res_mode, low = m == RES_5K ? 2 : m == 2 ? RES_1440 : m == RES_1440 ? 1 : m >= 3 && m <= 4 ? m - 1 : 1;
-            const char *names[] = {"", "1080p", "4K", "6K", "8K"};
-            const char *name = low == RES_1440 ? "1440p" : low >= 1 && low <= 4 ? names[low] : "1080p";
-            if (m != low) { g_settings.res_mode = low; g_settings.res_chosen = true; settings_save(); }
-            FATAL("Out of graphics memory (a %ux%u image).%s Close other programs that use the GPU and start the game again.\n", tw, th,
-                  m != low ? (low == 1 ? " Internal resolution was lowered to 1080p." : low == RES_1440 ? " Internal resolution was lowered to 1440p." :
-                              low == 2 ? " Internal resolution was lowered to 4K." : " Internal resolution was lowered.") : "");
-            (void)name;
+            // one step down the menu's list (0.2.9: at 720p it went UP to 1080p, "lowered to 1080p")
+            static const int order[] = {RES_540, RES_720, 1, RES_1440, 2, RES_5K, 3, 4};
+            static const char *const names[] = {"540p", "720p", "1080p", "1440p", "4K", "5K", "6K", "8K"};
+            int m = g_settings.res_mode, at = 2;  // (an older ini's other modes: as 1080p)
+            for (int i = 0; i < 8; i++) if (order[i] == m) at = i;
+            int low = at > 0 ? order[at - 1] : order[at];
+            char said[64] = "";
+            if (at > 0) {
+                g_settings.res_mode = low; g_settings.res_chosen = true; settings_save();
+                snprintf(said, sizeof said, " Internal resolution was lowered to %s.", names[at - 1]);
+            }
+            FATAL("Out of graphics memory (a %ux%u image).%s Close other programs that use the GPU and start the game again.\n", tw, th, said);
         }
     }
     if (r != VK_SUCCESS) {

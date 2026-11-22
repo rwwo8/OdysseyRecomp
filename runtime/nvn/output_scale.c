@@ -114,6 +114,7 @@ void output_scale(double dw, double dh, double want, double now, double gpu_ms, 
     int mode = g_settings.res_mode;
     if (forced > 0) h = forced;
     else if (mode >= 1 && mode <= 8) h = mode;
+    else if (mode == RES_540) h = 540.0 / 1080.0;
     else if (mode == RES_720) h = 720.0 / 1080.0;
     else if (mode == RES_900) h = 900.0 / 1080.0;
     else if (mode == RES_1440) h = 1440.0 / 1080.0;

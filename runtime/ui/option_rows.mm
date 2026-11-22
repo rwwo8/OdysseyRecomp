@@ -12,6 +12,7 @@
 #include "imgui_internal.h"  // (SetKeyOwner, NavCursorVisible)
 
 #include "option_rows.h"
+#include "../settings.h"  // (g_settings.menu_help)
 #include "osk.h"
 #include "theme.h"
 
@@ -81,6 +82,7 @@ static int card(const char *label, const Look &lk, bool changed, const char *des
     float w = ImGui::GetContentRegionAvail().x, fs = ImGui::GetFontSize(), pad = 22 * g_scale, base = fs * 2.15f;
     ImFont *font = ImGui::GetFont();
     float ds = fs * 0.78f, dh = 0;
+    if (!g_settings.menu_help) desc = NULL;  // (the menu's "Descriptions" off: GitHub #29)
     if (open && desc && *desc) dh = font->CalcTextSizeA(ds, FLT_MAX, w - 2 * pad, desc).y + fs * 0.55f;
     float h = base + dh;
     ImGui::PushStyleColor(ImGuiCol_NavCursor, ImVec4(0, 0, 0, 0));  // (the card's own ring shows the cursor)

@@ -194,6 +194,17 @@ static void create_device(void) {
             fclose(f);
             if (drv_crashed) LOG("[vk] this driver crashed building pipelines before (cache/driver.crash): whole pipelines only\n");
         }
+        // (exec.c lib_oom) this driver ran out of memory for pipeline libraries before: whole pipelines, as above
+        f = fopen("cache/gpl.off", "r");
+        if (f) {
+            char tag[64] = "";
+            if (fgets(tag, sizeof tag, f)) tag[strcspn(tag, "\r\n")] = 0;
+            fclose(f);
+            if (!strcmp(tag, g_vk_driver_tag)) {
+                drv_crashed = true;
+                LOG("[vk] this driver ran out of memory for pipeline libraries before (cache/gpl.off): whole pipelines only\n");
+            }
+        }
     }
     if (has_ext(ep, ne, VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME) && has_ext(ep, ne, VK_EXT_GRAPHICS_PIPELINE_LIBRARY_EXTENSION_NAME) &&
         !getenv("ODYSSEY_NO_GPL") && !drv_crashed) {

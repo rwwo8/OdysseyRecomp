@@ -4,7 +4,8 @@
 
 enum { RES_MATCH = 0, /* 1..8 = 1x..8x */ RES_DYNAMIC = 9, RES_Q75 = 10, RES_Q25 = 11, RES_Q50 = 12,
        // fixed sizes between the multiples (update 43): 720p, 900p (the Switch's own), 1440p, 5K
-       RES_720 = 13, RES_900 = 14, RES_1440 = 15, RES_5K = 16 };
+       RES_720 = 13, RES_900 = 14, RES_1440 = 15, RES_5K = 16,
+       RES_540 = 17 /* 0.2.9: weak integrated GPUs (a store report: "let me downscale") */ };
 // The menu offers fixed sizes only (update 43: Match display and Dynamic removed, the player's wish); an older ini's
 // match / dynamic / percentages are read as 1440p / 1440p / 1080p-720p. output_scale.c still knows them all.
 #define RES_DEFAULT RES_1440
@@ -58,6 +59,7 @@ typedef struct {
     char dsu_server[64]; // host:port
     int motion_sens;     // percent (0.2.6: how strongly the controller's motion reaches the game; 0 = off)
     bool mouse_invert_y;
+    bool menu_help;      // (0.2.9, GitHub #29) a setting's description opens under it when it is picked; off: never
 } Settings;
 // SHARPEN_AUTO: High while FSR 1 scales the image up, none at the display's own resolution (the look before the setting)
 enum { SHARPEN_OFF = 0, SHARPEN_LOW = 1, SHARPEN_MEDIUM = 2, SHARPEN_HIGH = 3, SHARPEN_AUTO = 4 };

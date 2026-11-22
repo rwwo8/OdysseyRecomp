@@ -14,8 +14,8 @@ BEGIN
         BEGIN
             VALUE "FileDescription", "Odyssey Recomp"
             VALUE "ProductName", "Odyssey Recomp"
-            VALUE "FileVersion", "0.2.8"
-            VALUE "ProductVersion", "0.2.8"
+            VALUE "FileVersion", "0.2.9"
+            VALUE "ProductVersion", "0.2.9"
             VALUE "OriginalFilename", "OdysseyRecomp.exe"
             VALUE "LegalCopyright", "MIT License. Not affiliated with Nintendo."
         END

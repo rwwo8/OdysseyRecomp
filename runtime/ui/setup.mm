@@ -308,6 +308,12 @@ int setup_headless(const char *root, const char *game) {
         return 0;
     }
     if (loader_peek_game((r + "/exefs/main").c_str()) == GAME_ODYSSEY && data_there(r)) g_code_only = true;
+    else if (!game || !game[0]) {  // (run again by the launcher without the copy, and the install has none: ask for it)
+        LOG("[setup] without a window (--setup): no copy given and none in %s\n", root);
+        printf("error The game files are needed again. Pick your Super Mario Odyssey 1.0.0 folder (exefs and romfs).\n");
+        fflush(stdout);
+        return 2;
+    }
     g_state = ST_BUSY;
     LOG("[setup] without a window (--setup): %s%s\n", game, g_code_only ? " (the game code only: the files are there)" : "");
     pthread_t th;

@@ -168,13 +168,18 @@ int main(int argc, char **argv) {
 #endif
     const char *root = "extracted";  // (in the data root)
     bool build_romfs = false;
-    const char *prepare = NULL, *setup_from = NULL;
+    const char *prepare = NULL, *setup_from = NULL, *setup_game = NULL;
     static char arg_root[1024];
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--play")) continue;  // (older scripts: the game always starts straight away now)
         else if (!strcmp(argv[i], "--build-romfs")) build_romfs = true;
         else if (!strcmp(argv[i], "--prepare-shaders") && i + 1 < argc) prepare = argv[++i];
-        else if (!strcmp(argv[i], "--setup") && i + 1 < argc) setup_from = argv[++i];  // (RecompLauncher: recomplauncher.json)
+        // (RecompLauncher: recomplauncher.json) --setup [<folder>] or --setup --game=<folder>. Since 0.2.9 the launcher
+        // keeps no copy after the setup (prepare.keeps_copy): after an update it runs the step again without --game
+        // (GitHub #18: it asked for the game files after every update and refused them) - the copy in the install
+        // is enough, only the game code is built again.
+        else if (!strcmp(argv[i], "--setup")) setup_from = i + 1 < argc && argv[i + 1][0] != '-' ? argv[++i] : "";
+        else if (!strncmp(argv[i], "--game=", 7)) setup_game = argv[i] + 7;
         else if (!strcmp(argv[i], "--data-root") && i + 1 < argc) {  // (the game's own, for its shader preparation)
 #ifdef _WIN32
             _putenv_s("ODYSSEY_DATA_ROOT", argv[++i]);
@@ -201,7 +206,7 @@ int main(int argc, char **argv) {
     (void)prepare;
 #endif
     // --setup <folder>: the first-start setup without a window (RecompLauncher's Easy Setup runs it: recomplauncher.json)
-    if (setup_from) return setup_headless(root, setup_from);
+    if (setup_from) return setup_headless(root, setup_game && setup_game[0] ? setup_game : setup_from);
     if (build_romfs) {  // --build-romfs: <root>/romfs.bin from <root>/romfs, as the start screen's setup does
         char dir[1100], out[1100], why[256];
         snprintf(dir, sizeof dir, "%s/romfs", root);

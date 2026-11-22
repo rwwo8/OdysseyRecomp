@@ -63,6 +63,10 @@ through on it at 60 fps.
   frame there meanwhile): at 240 the 2nd and 3rd in-betweens had repeated the 1st, and half-recorded lists made objects
   flicker - the Odyssey's balloon (`notes/interp-replay-lists-2026-11-20.md`). `tools/test_watch.py` reports such
   stalls.
+- 0.2.9 (released 2026-11-22; `notes/update-0.2.9-2026-11-22.md`): the game's own log reaches the launcher's reports (it
+  was `prepare.log` in almost every one); an AMD driver out of memory for pipeline libraries falls back to whole
+  pipelines, then and at its next starts (`cache/gpl.off`); the launcher no longer needs the game files after an update
+  (`keeps_copy`); 540p; menu descriptions can be turned off. AMD side not tried on AMD.
 
 ## Known problems
 
@@ -71,5 +75,7 @@ through on it at 60 fps.
 | A stage or effect seen for the first time can hold the picture for a moment (shader builds) | Upstream known issue; cached afterwards |
 | The first frame of a new scene (entering a kingdom, after a fall) takes 110-150 ms (GPU: a noise target in our pc-state-machine translation) | In the black loading screen, not seen; the 150-280 ms frames after it were the list table: fixed (`notes/scene-start-list-table-2026-11-20.md`) |
 | Linux: built on Windows (tools/linux/cross_build.sh), never run on Linux here | Open |
+| AMD Windows driver (RX 9070 XT, GitHub #31): stops itself in the 2nd kingdom; texture artifacts, choppy cutscenes (RX 7800 XT / 7600) | 0.2.9: fallback on its out-of-memory answers; the cause shows in the next log (the right log now reaches reports) |
+| RTX 5060 Ti / 5070 (0.2.7): black screen, no cutscene sound; RTX 2080: short freezes, pause background missing | No game log yet; not reproduced here |
 | Game update 1.4.0 not supported yet (1.0.0 only) | Planned |
 | Not re-checked on the new base: puddle colours, the flicker by Mario's eye on the title | Open |

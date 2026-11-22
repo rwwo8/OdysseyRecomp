@@ -2734,7 +2734,24 @@ static const VkDynamicState DYN_FO[] = {VK_DYNAMIC_STATE_BLEND_CONSTANTS};
 #define DYN_INFO(a) {.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, .dynamicStateCount = sizeof a / sizeof a[0], .pDynamicStates = a}
 
 static __thread VkResult t_lib_result;  // (the last create_lib_in's on this thread)
+// (0.2.9, GitHub #31 and the store's AMD reports) AMD's Windows driver (RX 9070 XT, 7800 XT) answered shader
+// libraries with VK_ERROR_OUT_OF_HOST_MEMORY by the thousand, already in the preparation (2.2-2.3 GB), and the game
+// stopped itself after a serious error minutes into the 2nd kingdom. A refused library was already soft (its program
+// builds whole pipelines), but every next program asked again. Now the first out-of-memory answer stops libraries for
+// the rest of this run (every new program whole) and writes cache/gpl.off with this driver's tag: the next starts on
+// the same driver go without pipeline libraries at all (device.c), like old AMD drivers. A new driver tries again.
+// ODYSSEY_TEST_LIB_OOM=<n> (tests): the n-th library is answered out of memory, as on that driver.
+_Atomic bool g_lib_oom;
+static void lib_oom(VkResult r) {
+    if (atomic_exchange(&g_lib_oom, true)) return;
+    extern char g_vk_driver_tag[64];
+    LOG("[vk] the driver ran out of memory for a pipeline library (%d): no more libraries in this run, whole pipelines "
+        "from the next start on this driver (cache/gpl.off)\n", r);
+    FILE *f = fopen("cache/gpl.off", "w");
+    if (f) { fprintf(f, "%s\n", g_vk_driver_tag); fclose(f); }
+}
 static VkPipeline create_lib_in(VkPipelineCache cache, VkGraphicsPipelineCreateInfo *pi, VkGraphicsPipelineLibraryFlagsEXT part) {
+    if (atomic_load(&g_lib_oom)) { t_lib_result = VK_ERROR_OUT_OF_HOST_MEMORY; return VK_NULL_HANDLE; }
     const void *next = pi->pNext;
     VkPipelineCreateFlags flags = pi->flags;
     VkGraphicsPipelineLibraryCreateInfoEXT li = {.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_LIBRARY_CREATE_INFO_EXT,
@@ -2743,7 +2760,17 @@ static VkPipeline create_lib_in(VkPipelineCache cache, VkGraphicsPipelineCreateI
     pi->flags |= VK_PIPELINE_CREATE_LIBRARY_BIT_KHR;
     VkPipeline lib = VK_NULL_HANDLE;
     VkResult r = vkCreateGraphicsPipelines(g_vk.dev, cache, 1, pi, NULL, &lib);
+    {
+        static int oom_at = -1;
+        static _Atomic int made;
+        if (oom_at < 0) oom_at = getenv("ODYSSEY_TEST_LIB_OOM") ? atoi(getenv("ODYSSEY_TEST_LIB_OOM")) : 0;
+        if (oom_at && atomic_fetch_add(&made, 1) + 1 == oom_at && r == VK_SUCCESS) {
+            vkDestroyPipeline(g_vk.dev, lib, NULL);
+            lib = VK_NULL_HANDLE, r = VK_ERROR_OUT_OF_HOST_MEMORY;
+        }
+    }
     t_lib_result = r;
+    if (r == VK_ERROR_OUT_OF_HOST_MEMORY || r == VK_ERROR_OUT_OF_DEVICE_MEMORY) lib_oom(r);
     pi->pNext = next;
     pi->flags = flags;
     if (r != VK_SUCCESS) {
@@ -3193,6 +3220,11 @@ static VkPipeline shader_lib(Prog *p, bool frag, int fill, bool cached_only) {
 // The two it lacks (a library made once is kept: destroying it gives NVIDIA's memory back only in part, see
 // compile_program). Not cached_only: no libraries = whole pipelines from its modules (no_gpl).
 static void make_shader_libs(Prog *p, bool cached_only) {
+    extern _Atomic bool g_lib_oom;  // (create_lib_in: the driver out of memory for libraries - whole pipelines)
+    if (atomic_load(&g_lib_oom) && !p->lib_fs) {
+        if (!cached_only) p->no_gpl = true;
+        return;
+    }
     if (!p->lib_pr[1]) p->lib_pr[1] = shader_lib(p, false, true, cached_only);
     if (!p->lib_fs) p->lib_fs = shader_lib(p, true, true, cached_only);
     if (!cached_only) p->no_gpl = !p->lib_pr[1] || !p->lib_fs;

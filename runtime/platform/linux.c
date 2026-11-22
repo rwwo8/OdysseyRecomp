@@ -90,6 +90,26 @@ static void log_to_file_without_terminal(void) {
     else if (stat("extracted", &st) == 0 && S_ISDIR(st.st_mode)) return;  // dev mode: wherever stderr goes already
     else if (xdg && *xdg == '/') snprintf(dir, sizeof dir, "%s/odyssey-recomp", xdg);
     else snprintf(dir, sizeof dir, "%s/.local/share/odyssey-recomp", home && *home ? home : "/tmp");
+    if (!(env && *env)) {
+        // (0.2.9) paths.c's rule: a release with recomplauncher.json beside it (RecompLauncher's install) keeps its data
+        // next to the program - and the launcher looks for the log there ({install}); it was in ~/.local/share, and
+        // the launcher's reports carried cache/prepare.log instead
+        char exe[900], top[1000], mark[1100], old[1100];
+        ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1);
+        if (n > 0) {
+            exe[n] = 0;
+            char *slash = strrchr(exe, '/');
+            if (slash) *slash = 0;
+            snprintf(top, sizeof top, "%s/../..", exe);
+            snprintf(mark, sizeof mark, "%s/recomplauncher.json", top);
+            snprintf(old, sizeof old, "%s/extracted", dir);
+            if (access(mark, F_OK) == 0 && !(stat(old, &st) == 0 && S_ISDIR(st.st_mode)) && access(top, W_OK) == 0) {
+                char *rp = realpath(top, NULL);
+                snprintf(dir, sizeof dir, "%s", rp ? rp : top);
+                free(rp);
+            }
+        }
+    }
     for (char *c = dir + 1; *c; c++)
         if (*c == '/') { *c = 0; mkdir(dir, 0755); *c = '/'; }
     mkdir(dir, 0755);

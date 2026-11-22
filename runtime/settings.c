@@ -35,6 +35,7 @@ Settings g_settings = {
     .motion_sens = 60,
     .dsu = true,
     .saturation = 1.0f,
+    .menu_help = true,
 };
 
 // The game's own text languages: its RomFS carries these per region (regionUS/USen|USes|USfr, regionEU/EUen|EUes|...,
@@ -141,7 +142,7 @@ void settings_load(void) {
             // (update 43: fixed sizes only - an older ini's match / dynamic become 1440p, its shares 1080p / 720p)
             // (720p / 900p were in update 43's list and taken out again: 1080p, the smallest now)
             // (0.2.6: 720p is back, for handhelds)
-            g_settings.res_mode = !strcasecmp(val, "1440p") ? RES_1440 : !strcasecmp(val, "5k") ? RES_5K : !strcasecmp(val, "720p") ? RES_720 :
+            g_settings.res_mode = !strcasecmp(val, "1440p") ? RES_1440 : !strcasecmp(val, "5k") ? RES_5K : !strcasecmp(val, "720p") ? RES_720 : !strcasecmp(val, "540p") ? RES_540 :
                                   (!strcasecmp(val, "900p") || strchr(val, '%')) ? 1 :
                                   (n >= 1 && n <= 4) ? n : RES_DEFAULT;
         }
@@ -163,6 +164,7 @@ void settings_load(void) {
         else if (!strcmp(key, "sharpening"))
             g_settings.sharpen = !strcmp(val, "off") ? SHARPEN_OFF : !strcmp(val, "low") ? SHARPEN_LOW :
                                  !strcmp(val, "medium") ? SHARPEN_MEDIUM : !strcmp(val, "high") ? SHARPEN_HIGH : SHARPEN_AUTO;
+        else if (!strcmp(key, "menu_help")) g_settings.menu_help = atoi(val) != 0;
         else if (!strcmp(key, "frame_graph")) g_settings.frame_graph = atoi(val) != 0;
         else if (!strcmp(key, "brightness")) g_settings.brightness = (float)atof(val);
         else if (!strcmp(key, "saturation")) g_settings.saturation = (float)atof(val);
@@ -216,6 +218,7 @@ void settings_save(void) {
     static const char *const sh[] = {"off", "low", "medium", "high", "auto"};
     fprintf(f, "sharpening = %s\n", sh[g_settings.sharpen >= 0 && g_settings.sharpen <= 4 ? g_settings.sharpen : 4]);
     fprintf(f, "frame_graph = %d\n", g_settings.frame_graph);
+    fprintf(f, "menu_help = %d\n", g_settings.menu_help);
     fprintf(f, "brightness = %.2f%c", g_settings.brightness, 10);
     fprintf(f, "saturation = %.2f%c", g_settings.saturation, 10);
     static const char *const fl[] = {"auto", "nintendo", "xbox"};
@@ -225,7 +228,7 @@ void settings_save(void) {
     {
         static const char *const mult[] = {"", "1080p", "4k", "6k", "8k"};
         int m = g_settings.res_mode;
-        fprintf(f, "resolution = %s\n", m == RES_720 ? "720p" : m == RES_900 ? "900p" : m == RES_1440 ? "1440p"
+        fprintf(f, "resolution = %s\n", m == RES_540 ? "540p" : m == RES_720 ? "720p" : m == RES_900 ? "900p" : m == RES_1440 ? "1440p"
                                        : m == RES_5K ? "5k" : m >= 1 && m <= 4 ? mult[m] : "1440p");
     }
     fprintf(f, "language = %s\n", g_language_codes[g_settings.language > LANG_AUTO && g_settings.language < N_LANGUAGES

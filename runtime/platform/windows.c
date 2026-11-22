@@ -126,14 +126,94 @@ void plat_thread_realtime(uint64_t period_ns) {
 // (a re-exec for a fresh address layout) append to the same log.
 static char g_log_path[MAX_PATH];
 
+// (0.2.9) Started by RecompLauncher, stderr is a pipe the launcher reads: the game wrote no OdysseyRecomp.log at all,
+// and the launcher's reports carried the only log it found, cache/prepare.log (the shader preparation's) - almost
+// every store report and GitHub #31 (the AMD crash) without the game's own lines. Now the pipe gets everything as
+// before and OdysseyRecomp.log too (log_tee: a thread between a pipe of our own and both). A fatal error flushes it
+// (plat_log_flush) before the process ends. ODYSSEY_NO_LOG_TEE=1: the pipe alone, as before.
+static HANDLE g_tee_rd, g_tee_out, g_tee_file;
+static volatile LONG64 g_tee_bytes;
+static DWORD WINAPI log_tee(LPVOID a) {
+    (void)a;
+    static char b[16384];
+    DWORD n, w;
+    LONG64 in_file = 0;
+    while (ReadFile(g_tee_rd, b, sizeof b, &n, NULL) && n) {
+        if (in_file < (512ll << 20)) WriteFile(g_tee_file, b, n, &w, NULL), in_file += n;  // (a runaway log stops at 512 MB)
+        if (g_tee_out && !WriteFile(g_tee_out, b, n, &w, NULL)) g_tee_out = NULL;  // (the launcher stopped reading)
+        InterlockedAdd64(&g_tee_bytes, n);
+    }
+    return 0;
+}
+// Everything written so far is in the file (at most ~2 s): nothing more read for 150 ms. (Not PeekNamedPipe: on the
+// read end, while log_tee waits in ReadFile on it, it waits too - synchronous I/O on one handle goes one at a time; the
+// first test hung there after a fatal error until the 15 s freeze watchdog.)
+void plat_log_flush(void) {
+    fflush(stdout);
+    fflush(stderr);
+    if (!g_tee_rd) return;
+    LONG64 last = -1;
+    for (int i = 0, still = 0; i < 40 && still < 3; i++) {
+        Sleep(50);
+        LONG64 now = g_tee_bytes;
+        still = now == last ? still + 1 : 0;
+        last = now;
+    }
+    FlushFileBuffers(g_tee_file);
+}
+static bool log_tee_start(HANDLE pipe_out, const char *path) {
+    SECURITY_ATTRIBUTES sa = {.nLength = sizeof sa, .bInheritHandle = TRUE};  // (the write end: children write to it)
+    HANDLE rd, wr;
+    if (!CreatePipe(&rd, &wr, &sa, 1 << 16)) return false;
+    SetHandleInformation(rd, HANDLE_FLAG_INHERIT, 0);
+    bool append = getenv("ODYSSEY_LOG_APPEND") != NULL;
+    HANDLE f = CreateFileA(path, append ? FILE_APPEND_DATA : GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                           append ? OPEN_ALWAYS : CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE) { CloseHandle(rd); CloseHandle(wr); return false; }
+    // (the launcher's pipe duplicated: _dup2 below closes stderr's own handle, and a handle value freed there was
+    // given to our pipe's write end - the thread wrote into its own pipe, a 20 GB log in seconds in the first test)
+    HANDLE out = NULL;
+    if (!DuplicateHandle(GetCurrentProcess(), pipe_out, GetCurrentProcess(), &out, 0, FALSE, DUPLICATE_SAME_ACCESS)) out = NULL;
+    int fd = _open_osfhandle((intptr_t)wr, _O_WRONLY | _O_BINARY);
+    if (fd < 0) { CloseHandle(rd); CloseHandle(wr); CloseHandle(f); if (out) CloseHandle(out); return false; }
+    g_tee_rd = rd, g_tee_out = out, g_tee_file = f;
+    HANDLE t = CreateThread(NULL, 0, log_tee, NULL, 0, NULL);
+    if (!t) { CloseHandle(f); CloseHandle(rd); _close(fd); g_tee_rd = NULL; return false; }
+    CloseHandle(t);
+    fflush(stdout);
+    fflush(stderr);
+    _dup2(fd, _fileno(stderr));
+    _dup2(fd, _fileno(stdout));
+    _close(fd);
+    SetStdHandle(STD_ERROR_HANDLE, (HANDLE)_get_osfhandle(_fileno(stderr)));
+    SetStdHandle(STD_OUTPUT_HANDLE, (HANDLE)_get_osfhandle(_fileno(stdout)));
+    setvbuf(stderr, NULL, _IONBF, 0);
+    _putenv("ODYSSEY_LOG_APPEND=1");
+    _putenv("ODYSSEY_LOG_TEED=1");  // (a re-exec writes into this pipe: its lines reach both through this process)
+    atexit(plat_log_flush);
+    return true;
+}
+
 static void log_to_file_without_console(void) {
-    if (GetStdHandle(STD_ERROR_HANDLE) && GetStdHandle(STD_ERROR_HANDLE) != INVALID_HANDLE_VALUE) return;  // console / pipe
+    HANDLE err = GetStdHandle(STD_ERROR_HANDLE);
+    bool to_pipe = false;
+    if (err && err != INVALID_HANDLE_VALUE) {
+        DWORD type = GetFileType(err), mode;
+        if (type == FILE_TYPE_PIPE) to_pipe = true;
+        else if (!(type == FILE_TYPE_CHAR && !GetConsoleMode(err, &mode))) return;  // a console or a file: as it is
+        // (else the NUL device: nobody reads it, so the file instead)
+    }
+    if (to_pipe && (getenv("ODYSSEY_LOG_TEED") || getenv("ODYSSEY_NO_LOG_TEE"))) return;
     char exe[MAX_PATH];
     DWORD n = GetModuleFileNameA(NULL, exe, sizeof exe);
     if (!n || n >= sizeof exe) return;
     char *slash = strrchr(exe, '\\');
     if (slash) slash[1] = 0;
     snprintf(g_log_path, sizeof g_log_path, "%sOdysseyRecomp.log", exe);
+    if (to_pipe) {
+        if (!log_tee_start(err, g_log_path)) g_log_path[0] = 0;
+        return;
+    }
     bool append = getenv("ODYSSEY_LOG_APPEND") != NULL;
     if (!freopen(g_log_path, append ? "ab" : "wb", stderr)) { g_log_path[0] = 0; return; }
     setvbuf(stderr, NULL, _IONBF, 0);
@@ -231,6 +311,7 @@ void plat_heap_check(const char *where) {
 
 // Fatal error (rt_fatal_trace): the last FATAL / exception line of the log in a message box, when there is no console.
 void plat_fatal_notice(void) {
+    plat_log_flush();  // (the last lines - the call chain - into OdysseyRecomp.log before the message box reads it)
     if (!g_log_path[0] || getenv("ODYSSEY_HIDDEN")) return;  // (hidden test runs: nothing on the player's screen)
     fflush(stderr);
     char text[1600] = "Odyssey Recomp stopped because of an error.";
@@ -560,4 +641,7 @@ bool plat_remove_tree(const char *dir) {
 }
 
 // End the process at once, skipping DLL teardown (from an atexit handler, after flushing). Exit status 0.
-void plat_terminate(void) { TerminateProcess(GetCurrentProcess(), 0); }
+void plat_terminate(void) {
+    plat_log_flush();  // (the log's last lines through log_tee first)
+    TerminateProcess(GetCurrentProcess(), 0);
+}

@@ -17,10 +17,15 @@
     ],
     "args": [
       "--setup",
-      "{game}"
+      "--game={game}"
     ],
     "label": "Copying your game files and building the game code (a few minutes, once)",
-    "timeout": 3600
+    "timeout": 3600,
+    "keeps_copy": true,
+    "done": [
+      "{install}/extracted/exefs/main",
+      "{install}/extracted/romfs.bin"
+    ]
   },
   "start": {
     "program": [
@@ -33,6 +38,11 @@
     "{install}/odyssey.ini"
   ],
   "folders": {
+    "game": [
+      {
+        "path": "{install}/extracted"
+      }
+    ],
     "saves": [
       {
         "path": "{install}/save"
@@ -75,6 +85,12 @@
       "help": "What the game draws at, then scaled to your screen. Higher is sharper and needs a faster GPU.",
       "group": "Display",
       "choices": [
+        {
+          "label": "540p (weak GPUs)",
+          "set": {
+            "resolution": "540p"
+          }
+        },
         {
           "label": "720p (handhelds)",
           "set": {
@@ -300,6 +316,111 @@
       }
     },
     {
+      "id": "sharpening",
+      "label": "Sharpening",
+      "help": "How much AMD FSR 1 sharpens the picture. Auto: high while it scales up, none at your screen's own size.",
+      "group": "Image",
+      "choices": [
+        {
+          "label": "Auto",
+          "set": {
+            "sharpening": "auto"
+          }
+        },
+        {
+          "label": "Off",
+          "set": {
+            "sharpening": "off"
+          }
+        },
+        {
+          "label": "Low",
+          "set": {
+            "sharpening": "low"
+          }
+        },
+        {
+          "label": "Medium",
+          "set": {
+            "sharpening": "medium"
+          }
+        },
+        {
+          "label": "High",
+          "set": {
+            "sharpening": "high"
+          }
+        }
+      ],
+      "defaults": {
+        "sharpening": "auto"
+      }
+    },
+    {
+      "id": "anisotropic",
+      "label": "Texture filtering",
+      "help": "Anisotropic filtering: textures on the ground stay sharp at an angle. Costs a little GPU time.",
+      "group": "Image",
+      "choices": [
+        {
+          "label": "16x",
+          "set": {
+            "anisotropic": "16"
+          }
+        },
+        {
+          "label": "8x",
+          "set": {
+            "anisotropic": "8"
+          }
+        },
+        {
+          "label": "4x",
+          "set": {
+            "anisotropic": "4"
+          }
+        },
+        {
+          "label": "2x",
+          "set": {
+            "anisotropic": "2"
+          }
+        },
+        {
+          "label": "As the game",
+          "set": {
+            "anisotropic": "game"
+          }
+        }
+      ],
+      "defaults": {
+        "anisotropic": "16"
+      }
+    },
+    {
+      "id": "deband",
+      "label": "Debanding",
+      "help": "Smooths the steps in gradients like the sky.",
+      "group": "Image",
+      "choices": [
+        {
+          "label": "On",
+          "set": {
+            "deband": "1"
+          }
+        },
+        {
+          "label": "Off",
+          "set": {
+            "deband": "0"
+          }
+        }
+      ],
+      "defaults": {
+        "deband": "1"
+      }
+    },
+    {
       "id": "show_fps",
       "label": "Show FPS",
       "group": "Display",
@@ -319,6 +440,29 @@
       ],
       "defaults": {
         "show_fps": "0"
+      }
+    },
+    {
+      "id": "frame_graph",
+      "label": "Frame time graph",
+      "help": "A graph of each frame's time under the FPS counter.",
+      "group": "Display",
+      "choices": [
+        {
+          "label": "Off",
+          "set": {
+            "frame_graph": "0"
+          }
+        },
+        {
+          "label": "On",
+          "set": {
+            "frame_graph": "1"
+          }
+        }
+      ],
+      "defaults": {
+        "frame_graph": "0"
       }
     },
     {

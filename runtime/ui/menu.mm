@@ -533,9 +533,10 @@ static void tab_display(void) {
     // (named by their size, fixed sizes only: Match display, Dynamic and the shares of the display removed for more
     // quality steps - the player, 2026-11-07; 720p / 900p taken out again, the player's wish)
     // (0.2.6: 720p back for handhelds - the Steam Deck's own default: its screen is 800p)
-    static const char *res[] = {"720p (handhelds)", "1080p", "1440p", "4K", "5K", "6K", "8K"};
-    static const int res_mode[] = {RES_720, 1, RES_1440, 2, RES_5K, 3, 4};
-    enum { RES_DEFAULT_AT = 2 };
+    // (0.2.9: 540p, for weak integrated GPUs - a store report asked to go lower than 720p)
+    static const char *res[] = {"540p (weak GPUs)", "720p (handhelds)", "1080p", "1440p", "4K", "5K", "6K", "8K"};
+    static const int res_mode[] = {RES_540, RES_720, 1, RES_1440, 2, RES_5K, 3, 4};
+    enum { RES_DEFAULT_AT = 3 };
     enum { NRES = sizeof res_mode / sizeof res_mode[0] };
     {
         int ri = RES_DEFAULT_AT;
@@ -789,6 +790,10 @@ static void tab_about(void) {
     opt_section("Bindings");
     controls_bindings_draw(scale);
     opt_section("This menu");
+    if (opt_toggle("Descriptions", &g_settings.menu_help, true,
+                   "What a setting does, opened under it when you pick it. Off: the list stays the same size while you "
+                   "move through it."))
+        settings_save();
     ImGui::PushStyleColor(ImGuiCol_Text, kTextDimV);
     ImGui::PushTextWrapPos(0);
     ImGui::TextUnformatted("Open / close: F1, Esc, the controller's Home / Xbox / PS button, or Back + Start held "
